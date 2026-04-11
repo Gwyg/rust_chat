@@ -1,13 +1,13 @@
 mod models;
-mod state;
 mod routes;
+mod state;
 mod ws;
 
 use axum::{Router, routing::get};
+use routes::{index, ws_handler};
+use state::AppState;
 use tower_http::services::ServeDir;
 use tracing::info;
-use state::AppState;
-use routes::{index, ws_handler};
 
 #[tokio::main]
 async fn main() {
@@ -24,5 +24,18 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("服务启动：http://localhost:3000");
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("serve failed");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl_c handler");
+    };
+    ctrl_c.await;
+    info!("收到关闭信号，正在停止服务");
 }
