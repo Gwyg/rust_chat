@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Room</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; }
+        #join-form { margin-bottom: 20px; }
+        #join-form input, #join-form select { margin: 5px; padding: 5px; }
+        #chat { display: none; }
+        #messages { list-style: none; padding: 0; height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
+        #messages li { margin: 5px 0; }
+        .system { color: #888; }
+        .error { color: red; }
+        .self { color: blue; }
+        #input-area { display: none; margin-top: 10px; }
+        #input-area input { width: 70%; padding: 5px; }
+        #input-area button { padding: 5px 15px; }
+    </style>
+</head>
+<body>
+    <h1>Chat Room</h1>
+
+    <div id="join-form">
+        <input id="username" placeholder="你的昵称" />
+        <select id="room-select">
+            <option value="Java群">Java群</option>
+            <option value="Rust群">Rust群</option>
+            <option value="闲聊">闲聊</option>
+        </select>
+        <button onclick="joinRoom()">加入</button>
+    </div>
+
+    <div id="chat">
+        <ul id="messages"></ul>
+        <div id="input-area">
+            <input id="msg" placeholder="输入消息" />
+            <button onclick="send()">发送</button>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let myUsername;
+        let myRoom;
+
+        function joinRoom() {
+            myUsername = document.getElementById('username').value.trim();
+            myRoom = document.getElementById('room-select').value;
+            if (!myUsername) { alert('请输入昵称'); return; }
+
+            ws = new WebSocket("ws://localhost:3000/ws");
+
+            // 发送 join 消息
+            ws.onopen = () => {
+                ws.send(JSON.stringify({
+                    username: myUsername,
+                    room: myRoom,
+                    content: ""
+                }));
+            };
+
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                const li = document.createElement("li");
+
+                if (msg.type === "error") {
+                    li.className = "error";
+                    li.textContent = "❌ " + msg.content;
+                    document.getElementById("messages").appendChild(li);
+                    return;
+                }
+
+                if (msg.type === "system") {
+                    li.className = "system";
+                } else if (msg.username === myUsername) {
+                    li.className = "self";
+                }
+
+                li.textContent = `[${msg.username}] ${msg.content}`;
+                document.getElementById("messages").appendChild(li);
+                document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
+            };
+
+            ws.onclose = () => {
+                const li = document.createElement("li");
+                li.className = "system";
+                li.textContent = "连接已断开";
+                document.getElementById("messages").appendChild(li);
+                document.getElementById("input-area").style.display = "none";
+            };
+
+            document.getElementById("join-form").style.display = "none";
+            document.getElementById("chat").style.display = "block";
+            document.getElementById("input-area").style.display = "block";
+        }
+
+        function send() {
+            const input = document.getElementById("msg");
+            const content = input.value.trim();
+            if (!content || !ws) return;
+
+            ws.send(JSON.stringify({
+                username: myUsername,
+                room: myRoom,
+                content: content
+            }));
+            input.value = "";
+        }
+
+        document.getElementById("msg").addEventListener("keypress", (e) => {
+            if (e.key === "Enter") send();
+        });
+    </script>
+</body>
+</html>
