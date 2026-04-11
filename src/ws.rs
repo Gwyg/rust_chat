@@ -1,3 +1,4 @@
+use crate::db;
 use crate::models::{ClientMessage, ServerMessage};
 use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
@@ -6,109 +7,64 @@ use tokio::sync::broadcast;
 use tokio::time::interval;
 use tracing::info;
 
+/// WebSocket 核心处理
 pub async fn handler_socket(mut socket: WebSocket, state: AppState) {
-    // 解析 join 消息
-    let json_msg = match socket.recv().await {
-        Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
-            Ok(msg) => msg,
-            Err(_) => {
-                send_error(&mut socket, "消息格式错误").await;
-                return;
-            }
-        },
-        _ => return,
+    // === 前置校验 ===
+    let join_msg = match parse_join_message(&mut socket).await {
+        Some(msg) => msg,
+        None => return,
     };
 
-    let username = json_msg.username;
-    let room = json_msg.room;
+    let username = join_msg.username;
+    let room = join_msg.room;
 
-    // 检查房间是否存在
-    let tx = {
-        let rooms = state.rooms.read().await;
-        match rooms.get(&room) {
-            Some(tx) => tx.clone(),
-            None => {
-                send_error(&mut socket, &format!("房间「{}」不存在", room)).await;
-                return;
-            }
-        }
+    let tx = match find_room(&state, &room, &mut socket).await {
+        Some(tx) => tx,
+        None => return,
     };
 
+    // === 加入房间 ===
     info!("用户 {} 加入房间 {}", username, room);
-
-    if let Err(e) = tx.send(ClientMessage {
-        username: "系统".into(),
-        room: room.clone(),
-        content: format!("用户 {} 加入房间 {}", username, room),
-    }) {
-        tracing::error!("广播消息发送失败: {}", e);
-    }
+    broadcast_system(&tx, &room, &format!("用户 {} 加入房间 {}", username, room)).await;
 
     let mut rx = tx.subscribe();
-
-    // 跳过第一个立即触发的 tick
     let mut heartbeat = interval(Duration::from_secs(30));
     heartbeat.tick().await;
 
+    // === 主循环 ===
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
                 if socket.send(Message::Ping(vec![].into())).await.is_err() {
                     info!("用户 {} 心跳超时，断开", username);
-                    if let Err(e) = tx.send(ClientMessage {
-                        username: "系统".into(),
-                        room: room.clone(),
-                        content: format!("{} 离开了房间", username),
-                    }) {
-                        tracing::error!("广播消息发送失败: {}", e);
-                    }
+                    broadcast_system(&tx, &room, &format!("{} 离开了房间", username)).await;
                     break;
                 }
             }
+
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        let client_msg = match serde_json::from_str::<ClientMessage>(&text) {
-                            Ok(m) => m,
-                            Err(_) => continue,
-                        };
-                        let _ = tx.send(ClientMessage {
-                            username: username.clone(),
-                            room: room.clone(),
-                            content: client_msg.content,
-                        });
+                        handle_client_message(&state, &text, &username, &room).await;
                     }
                     Some(Ok(Message::Pong(_))) => {}
                     _ => {
                         info!("用户 {} 断开", username);
-                        if let Err(e) = tx.send(ClientMessage {
-                            username: "系统".into(),
-                            room: room.clone(),
-                            content: format!("{} 离开了房间", username),
-                        }) {
-                            tracing::error!("广播消息发送失败: {}", e);
-                        }
+                        broadcast_system(&tx, &room, &format!("{} 离开了房间", username)).await;
                         break;
                     }
                 }
             }
+
             msg = rx.recv() => {
                 match msg {
                     Ok(client_msg) => {
-                        let server_msg = ServerMessage {
-                            msg_type: "message".into(),
-                            username: client_msg.username,
-                            content: client_msg.content,
-                        };
-                        if socket.send(Message::Text(
-                            serde_json::to_string(&server_msg).unwrap(),
-                        )).await.is_err() {
+                        if !forward_to_client(&mut socket, client_msg).await {
                             break;
                         }
-
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("Lagged by {} messages", n);
+                        tracing::warn!("用户 {} 消息 lagged，丢失 {} 条", username, n);
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -118,12 +74,99 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState) {
     }
 }
 
+async fn broadcast_system(tx: &broadcast::Sender<ClientMessage>, room: &str, content: &str) {
+    if let Err(e) = tx.send(ClientMessage {
+        username: "系统".into(),
+        room: room.into(),
+        content: content.into(),
+    }) {
+        tracing::error!("广播消息发送失败: {}", e);
+    }
+}
+
 async fn send_error(socket: &mut WebSocket, content: &str) {
-    let _ = socket.send(Message::Text(
-        serde_json::to_string(&ServerMessage {
-            msg_type: "error".into(),
-            username: "".into(),
-            content: content.into(),
-        }).expect("serialize ServerMessage failed"),
-    )).await;
+    let _ = socket
+        .send(Message::Text(
+            serde_json::to_string(&ServerMessage {
+                msg_type: "error".into(),
+                username: "".into(),
+                content: content.into(),
+            })
+            .expect("serialize ServerMessage failed"),
+        ))
+        .await;
+}
+
+/// 解析 join 消息
+async fn parse_join_message(socket: &mut WebSocket) -> Option<ClientMessage> {
+    match socket.recv().await {
+        Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
+            Ok(msg) => Some(msg),
+            Err(_) => {
+                send_error(socket, "消息格式错误").await;
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+/// 查找房间
+async fn find_room(
+    state: &AppState,
+    room: &str,
+    socket: &mut WebSocket,
+) -> Option<broadcast::Sender<ClientMessage>> {
+    let rooms = state.rooms.read().await;
+    match rooms.get(room) {
+        Some(tx) => Some(tx.clone()),
+        None => {
+            send_error(socket, &format!("房间「{}」不存在", room)).await;
+            None
+        }
+    }
+}
+
+/// 处理单条客户端消息
+async fn handle_client_message(state: &AppState, text: &str, username: &str, room: &str) {
+    match serde_json::from_str::<ClientMessage>(text) {
+        Ok(m) => {
+            let tx = {
+                let rooms = state.rooms.read().await;
+                rooms.get(room).cloned()
+            };
+            if let Some(tx) = tx {
+                if let Err(e) = tx.send(ClientMessage {
+                    username: username.into(),
+                    room: room.into(),
+                    content: m.content.clone(),
+                }) {
+                    tracing::error!("广播消息发送失败: {}", e);
+                } else {
+                    if let Err(e) = db::save_message(&state.db, &username, &room, &m.content).await
+                    {
+                        tracing::error!("保存消息失败: {}", e);
+                    }
+                }
+            }
+        }
+        Err(_) => {} // 格式错误的消息静默丢弃
+    }
+}
+/// 将广播消息转发给客户端
+async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage) -> bool {
+    let server_msg = ServerMessage {
+        msg_type: "message".into(),
+        username: client_msg.username,
+        content: client_msg.content,
+    };
+    match socket
+        .send(Message::Text(
+            serde_json::to_string(&server_msg).expect("serialize ServerMessage failed"),
+        ))
+        .await
+    {
+        Ok(_) => true,
+        Err(_) => false, // 发送失败，断开连接
+    }
 }

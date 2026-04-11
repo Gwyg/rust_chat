@@ -1,3 +1,4 @@
+mod db;
 mod models;
 mod routes;
 mod state;
@@ -13,7 +14,16 @@ use tracing::info;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let state = AppState::new();
+    // 初始化数据库
+    let pool = db::create_pool("chat.db").await.expect("数据库初始化失败");
+
+    // 运行迁移
+    sqlx::migrate!("./data")
+        .run(&pool)
+        .await
+        .expect("数据库迁移失败");
+
+    let state = AppState::new(pool);
     state.init_rooms(vec!["Java群", "Rust群", "闲聊"]).await;
 
     let app = Router::new()
@@ -22,8 +32,11 @@ async fn main() {
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    info!("服务启动：http://localhost:3000");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .expect("bind failed");
+    info!("服务启动: http://localhost:3000");
+
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
@@ -39,3 +52,5 @@ async fn shutdown_signal() {
     ctrl_c.await;
     info!("收到关闭信号，正在停止服务");
 }
+
+
