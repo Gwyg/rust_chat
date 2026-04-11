@@ -1,15 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use crate::db::DbPool;
 use crate::models::ClientMessage;
 
 pub type RoomMap = Arc<RwLock<HashMap<String, broadcast::Sender<ClientMessage>>>>;
+pub type OnlineMap = Arc<RwLock<HashMap<String, HashSet<String>>>>;
 
 #[derive(Clone)]
 pub struct AppState {
     pub rooms: RoomMap,
     pub db: DbPool,
+    pub online: OnlineMap, 
 }
 
 impl AppState {
@@ -17,6 +19,7 @@ impl AppState {
         Self {
             rooms: Arc::new(RwLock::new(HashMap::new())),
             db,
+            online: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

@@ -1,40 +1,275 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat Room</title>
     <style>
-        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; }
-        #join-form { margin-bottom: 20px; }
-        #join-form input, #join-form select { margin: 5px; padding: 5px; }
-        #chat { display: none; }
-        #messages { list-style: none; padding: 0; height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
-        #messages li { margin: 5px 0; }
-        .system { color: #888; }
-        .error { color: red; }
-        .self { color: blue; }
-        #input-area { display: none; margin-top: 10px; }
-        #input-area input { width: 70%; padding: 5px; }
-        #input-area button { padding: 5px 15px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* === 登录页 === */
+        #login-page {
+            background: #fff;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+            text-align: center;
+            width: 360px;
+        }
+        #login-page h2 { margin-bottom: 8px; color: #1a1a2e; }
+        #login-page p { color: #888; font-size: 14px; margin-bottom: 24px; }
+        #login-page input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e8e8e8;
+            border-radius: 10px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        #login-page input:focus { border-color: #6c63ff; }
+        #login-page select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e8e8e8;
+            border-radius: 10px;
+            font-size: 15px;
+            outline: none;
+            margin-top: 12px;
+            background: #fff;
+            cursor: pointer;
+        }
+        #login-page button {
+            width: 100%;
+            margin-top: 20px;
+            padding: 12px;
+            background: #6c63ff;
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #login-page button:hover { background: #5a52d5; }
+
+        /* === 聊天页 === */
+        #chat-page {
+            display: none;
+            width: 500px;
+            max-width: 100vw;
+            height: 90vh;
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* 顶栏 */
+        .chat-header {
+            padding: 16px 20px;
+            background: #6c63ff;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+        .chat-header .room-name { font-weight: 600; font-size: 17px; }
+        .chat-header .online-count { font-size: 13px; opacity: 0.85; }
+        .chat-header .leave-btn {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: #fff;
+            padding: 6px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .chat-header .leave-btn:hover { background: rgba(255,255,255,0.3); }
+
+        /* 消息区 */
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            background: #f5f5f5;
+        }
+        #messages::-webkit-scrollbar { width: 5px; }
+        #messages::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+        /* 消息行容器 */
+        .msg-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        .msg-row.self {
+            flex-direction: row-reverse;
+        }
+
+        /* 头像 */
+        .avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        /* 消息主体（用户名 + 气泡） */
+        .msg-body {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-width: 65%;
+        }
+        .msg-row.self .msg-body { align-items: flex-end; }
+        .msg-row.other .msg-body { align-items: flex-start; }
+
+        /* 用户名 */
+        .msg-username {
+            font-size: 12px;
+            color: #888;
+            font-weight: 500;
+            padding: 0 4px;
+        }
+
+        /* 气泡 */
+        .bubble {
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 14px;
+            line-height: 1.6;
+            word-break: break-word;
+            position: relative;
+        }
+        .msg-row.other .bubble {
+            background: #fff;
+            color: #1a1a2e;
+            border-top-left-radius: 2px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+        }
+        .msg-row.self .bubble {
+            background: #6c63ff;
+            color: #fff;
+            border-top-right-radius: 2px;
+        }
+
+        /* 时间戳 */
+        .msg-time {
+            font-size: 11px;
+            color: #bbb;
+            padding: 0 4px;
+        }
+
+        /* 系统消息 */
+        .msg-system {
+            align-self: center;
+            font-size: 12px;
+            color: #aaa;
+            background: rgba(0,0,0,0.05);
+            padding: 4px 12px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        /* 错误消息 */
+        .msg-error {
+            align-self: center;
+            font-size: 13px;
+            color: #e74c3c;
+            background: #fff0f0;
+            border: 1px solid #fdd;
+            padding: 6px 14px;
+            border-radius: 8px;
+        }
+
+        /* 输入区 */
+        .input-area {
+            padding: 12px 16px;
+            border-top: 1px solid #e8e8e8;
+            display: flex;
+            gap: 10px;
+            background: #fff;
+            flex-shrink: 0;
+        }
+        .input-area input {
+            flex: 1;
+            padding: 10px 16px;
+            border: 2px solid #e8e8e8;
+            border-radius: 24px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .input-area input:focus { border-color: #6c63ff; }
+        .input-area button {
+            padding: 10px 24px;
+            background: #6c63ff;
+            color: #fff;
+            border: none;
+            border-radius: 24px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .input-area button:hover { background: #5a52d5; }
+
+        /* 响应式 */
+        @media (max-width: 540px) {
+            #chat-page { width: 100vw; height: 100vh; border-radius: 0; }
+            #login-page { width: calc(100vw - 32px); }
+        }
     </style>
 </head>
 <body>
-    <h1>Chat Room</h1>
-
-    <div id="join-form">
-        <input id="username" placeholder="你的昵称" />
+    <!-- 登录页 -->
+    <div id="login-page">
+        <h2>💬 加入聊天</h2>
+        <p>输入昵称，选择一个房间开始聊天</p>
+        <input id="username" placeholder="你的昵称" maxlength="20" />
         <select id="room-select">
-            <option value="Java群">Java群</option>
-            <option value="Rust群">Rust群</option>
-            <option value="闲聊">闲聊</option>
+            <option value="Java群">☕ Java群</option>
+            <option value="Rust群">🦀 Rust群</option>
+            <option value="闲聊">🎯 闲聊</option>
         </select>
-        <button onclick="joinRoom()">加入</button>
+        <button onclick="joinRoom()">开始聊天</button>
     </div>
 
-    <div id="chat">
-        <ul id="messages"></ul>
-        <div id="input-area">
-            <input id="msg" placeholder="输入消息" />
+    <!-- 聊天页 -->
+    <div id="chat-page">
+        <div class="chat-header">
+            <div>
+                <div class="room-name" id="room-title">房间</div>
+                <div class="online-count" id="online-count">在线: 1</div>
+            </div>
+            <button class="leave-btn" onclick="leaveRoom()">退出</button>
+        </div>
+        <div id="messages"></div>
+        <div class="input-area">
+            <input id="msg" placeholder="输入消息..." maxlength="500" />
             <button onclick="send()">发送</button>
         </div>
     </div>
@@ -43,15 +278,88 @@
         let ws;
         let myUsername;
         let myRoom;
+        let onlineCount = 0;
+
+        // 根据用户名生成固定颜色头像
+        const AVATAR_COLORS = [
+            "#f4693b", "#e91e8c", "#9c27b0", "#3f51b5",
+            "#2196f3", "#00bcd4", "#009688", "#4caf50",
+            "#ff9800", "#795548"
+        ];
+        function getAvatarColor(name) {
+            let hash = 0;
+            for (let c of name) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
+            return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+        }
+        function getAvatarLetter(name) {
+            return name.charAt(0).toUpperCase();
+        }
+
+        function formatTime(date) {
+            return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement("div");
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        function appendMessage(type, username, content) {
+            const container = document.getElementById("messages");
+
+            if (type === "error") {
+                const div = document.createElement("div");
+                div.className = "msg-error";
+                div.textContent = "❌ " + content;
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+                return;
+            }
+
+            if (type === "system") {
+                const div = document.createElement("div");
+                div.className = "msg-system";
+                div.textContent = content;
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+                return;
+            }
+
+            // 普通消息
+            const isSelf = username === myUsername;
+            const time = formatTime(new Date());
+            const color = getAvatarColor(username);
+            const letter = getAvatarLetter(username);
+
+            const row = document.createElement("div");
+            row.className = "msg-row " + (isSelf ? "self" : "other");
+
+            row.innerHTML = `
+                <div class="avatar" style="background:${color}">${letter}</div>
+                <div class="msg-body">
+                    ${!isSelf ? `<div class="msg-username">${escapeHtml(username)}</div>` : ""}
+                    <div class="bubble">${escapeHtml(content)}</div>
+                    <div class="msg-time">${time}</div>
+                </div>
+            `;
+
+            container.appendChild(row);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateOnlineCount(delta) {
+            onlineCount = Math.max(0, onlineCount + delta);
+            document.getElementById("online-count").textContent = "在线: " + onlineCount;
+        }
 
         function joinRoom() {
-            myUsername = document.getElementById('username').value.trim();
-            myRoom = document.getElementById('room-select').value;
-            if (!myUsername) { alert('请输入昵称'); return; }
+            myUsername = document.getElementById("username").value.trim();
+            myRoom = document.getElementById("room-select").value;
+            if (!myUsername) { alert("请输入昵称"); return; }
 
             ws = new WebSocket("ws://localhost:3000/ws");
 
-            // 发送 join 消息
             ws.onopen = () => {
                 ws.send(JSON.stringify({
                     username: myUsername,
@@ -62,44 +370,40 @@
 
             ws.onmessage = (e) => {
                 const msg = JSON.parse(e.data);
-                const li = document.createElement("li");
-
-                if (msg.type === "error") {
-                    li.className = "error";
-                    li.textContent = "❌ " + msg.content;
-                    document.getElementById("messages").appendChild(li);
-                    return;
+                if (msg.type === "history") {
+                    appendMessage("message", msg.username, msg.content);
+                } else if (msg.type === "error") {
+                    appendMessage("error", "", msg.content);
+                } else if (msg.content.includes("加入房间") || msg.content.includes("离开了房间")) {
+                    appendMessage("system", "", msg.content);
+                    if (msg.content.includes("加入房间")) updateOnlineCount(1);
+                    if (msg.content.includes("离开了房间")) updateOnlineCount(-1);
+                } else {
+                    appendMessage("message", msg.username, msg.content);
                 }
-
-                if (msg.type === "system") {
-                    li.className = "system";
-                } else if (msg.username === myUsername) {
-                    li.className = "self";
-                }
-
-                li.textContent = `[${msg.username}] ${msg.content}`;
-                document.getElementById("messages").appendChild(li);
-                document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
             };
 
             ws.onclose = () => {
-                const li = document.createElement("li");
-                li.className = "system";
-                li.textContent = "连接已断开";
-                document.getElementById("messages").appendChild(li);
-                document.getElementById("input-area").style.display = "none";
+                appendMessage("system", "", "连接已断开");
             };
 
-            document.getElementById("join-form").style.display = "none";
-            document.getElementById("chat").style.display = "block";
-            document.getElementById("input-area").style.display = "block";
+            document.getElementById("login-page").style.display = "none";
+            document.getElementById("chat-page").style.display = "flex";
+            document.getElementById("room-title").textContent = myRoom;
+        }
+
+        function leaveRoom() {
+            if (ws) ws.close();
+            document.getElementById("chat-page").style.display = "none";
+            document.getElementById("login-page").style.display = "block";
+            document.getElementById("messages").innerHTML = "";
+            onlineCount = 0;
         }
 
         function send() {
             const input = document.getElementById("msg");
             const content = input.value.trim();
             if (!content || !ws) return;
-
             ws.send(JSON.stringify({
                 username: myUsername,
                 room: myRoom,

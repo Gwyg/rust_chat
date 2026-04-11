@@ -3,12 +3,15 @@ mod models;
 mod routes;
 mod state;
 mod ws;
+mod auth;
 
-use axum::{Router, routing::get};
+use axum::{Router, routing::{get, post}};
 use routes::{index, ws_handler};
 use state::AppState;
 use tower_http::services::ServeDir;
 use tracing::info;
+
+use crate::routes::{login, room_members};
 
 #[tokio::main]
 async fn main() {
@@ -29,6 +32,8 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/ws", get(ws_handler))
+        .route("/api/rooms/:room/members", get(room_members))
+        .route("/api/login", post(login))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state);
 

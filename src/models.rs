@@ -14,3 +14,13 @@ pub struct ServerMessage {
     pub username: String,
     pub content: String,
 }
+
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+}
+
+#[derive(Serialize)]
+pub struct LoginResponse {
+    pub token: String,
+}

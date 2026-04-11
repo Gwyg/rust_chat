@@ -1,6 +1,6 @@
-use crate::db;
 use crate::models::{ClientMessage, ServerMessage};
 use crate::state::AppState;
+use crate::{auth, db};
 use axum::extract::ws::{Message, WebSocket};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -8,7 +8,15 @@ use tokio::time::interval;
 use tracing::info;
 
 /// WebSocket 核心处理
-pub async fn handler_socket(mut socket: WebSocket, state: AppState) {
+pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: String) {
+    // 验证 token
+    let _ = match auth::verify_token(&token) {
+        Ok(name) => name,
+        Err(_) => {
+            send_error(&mut socket, "无效的 token，请重新登录").await;
+            return;
+        }
+    };
     // === 前置校验 ===
     let join_msg = match parse_join_message(&mut socket).await {
         Some(msg) => msg,
@@ -25,6 +33,37 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState) {
 
     // === 加入房间 ===
     info!("用户 {} 加入房间 {}", username, room);
+    let mut online = state.online.write().await;
+    online
+        .entry(room.clone())
+        .or_default()
+        .insert(username.clone());
+
+    // 推送历史消息
+    match db::get_room_history(&state.db, &room, 50).await {
+        Ok(messages) => {
+            for msg in messages {
+                let server_msg = ServerMessage {
+                    msg_type: "history".into(),
+                    username: msg.username,
+                    content: msg.content,
+                };
+                if socket
+                    .send(Message::Text(
+                        serde_json::to_string(&server_msg).expect("serialize failed"),
+                    ))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("查询历史消息失败: {}", e);
+        }
+    }
+
     broadcast_system(&tx, &room, &format!("用户 {} 加入房间 {}", username, room)).await;
 
     let mut rx = tx.subscribe();
@@ -50,7 +89,6 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState) {
                     Some(Ok(Message::Pong(_))) => {}
                     _ => {
                         info!("用户 {} 断开", username);
-                        broadcast_system(&tx, &room, &format!("{} 离开了房间", username)).await;
                         break;
                     }
                 }
@@ -72,6 +110,13 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState) {
             }
         }
     }
+
+    let mut online = state.online.write().await;
+    if let Some(members) = online.get_mut(&room) {
+        members.remove(&username);
+    }
+    broadcast_system(&tx, &room, &format!("{} 离开了房间", username)).await;
+    info!("用户 {} 离开房间 {}", username, room);
 }
 
 async fn broadcast_system(tx: &broadcast::Sender<ClientMessage>, room: &str, content: &str) {
