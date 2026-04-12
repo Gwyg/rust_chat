@@ -1,7 +1,7 @@
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use axum::{
-    extract::{Request, State},
+    extract::{Request},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
