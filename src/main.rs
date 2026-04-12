@@ -5,13 +5,8 @@ mod state;
 mod ws;
 mod auth;
 
-use axum::{Router, routing::{get, post}};
-use routes::{index, ws_handler};
 use state::AppState;
-use tower_http::services::ServeDir;
 use tracing::info;
-
-use crate::routes::{login, room_members};
 
 #[tokio::main]
 async fn main() {
@@ -29,13 +24,7 @@ async fn main() {
     let state = AppState::new(pool);
     state.init_rooms(vec!["Java群", "Rust群", "闲聊"]).await;
 
-    let app = Router::new()
-        .route("/", get(index))
-        .route("/ws", get(ws_handler))
-        .route("/api/rooms/:room/members", get(room_members))
-        .route("/api/login", post(login))
-        .nest_service("/static", ServeDir::new("static"))
-        .with_state(state);
+    let app = routes::app(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>登录 - Chat Room</title>
+    <style>
+        body { font-family: sans-serif; display: flex; align-items: center;
+               justify-content: center; height: 100vh; margin: 0; background: #f0f2f5; }
+        .box { background: #fff; padding: 40px; border-radius: 12px;
+               box-shadow: 0 4px 20px rgba(0,0,0,0.1); width: 320px; }
+        h2 { margin: 0 0 20px; text-align: center; }
+        input { width: 100%; padding: 10px; margin-bottom: 12px;
+                border: 1px solid #ddd; border-radius: 8px; font-size: 14px;
+                box-sizing: border-box; }
+        button { width: 100%; padding: 10px; background: #6c63ff; color: #fff;
+                 border: none; border-radius: 8px; font-size: 15px; cursor: pointer; }
+        button:hover { background: #5a52d5; }
+        .err { color: red; font-size: 13px; margin-top: 8px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>💬 进入聊天室</h2>
+        <input id="username" placeholder="输入昵称" maxlength="20" />
+        <button onclick="doLogin()">登录</button>
+        <div class="err" id="err"></div>
+    </div>
+    <script>
+        async function doLogin() {
+            const username = document.getElementById('username').value.trim();
+            if (!username) { showErr('请输入昵称'); return; }
+
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username }),
+            });
+
+            if (!res.ok) { showErr(await res.text()); return; }
+
+            const { token } = await res.json();
+            // 把 token 写入 Cookie，让后端中间件能读到
+            document.cookie = `chat_token=${token}; path=/; max-age=86400`;
+            window.location.href = '/';
+        }
+
+        function showErr(msg) {
+            const el = document.getElementById('err');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        document.getElementById('username').addEventListener('keypress', e => {
+            if (e.key === 'Enter') doLogin();
+        });
+    </script>
+</body>
+</html>

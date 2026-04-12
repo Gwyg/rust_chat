@@ -62,11 +62,17 @@
             transition: background 0.2s;
         }
         #login-page button:hover { background: #5a52d5; }
+        #login-page .error-msg {
+            color: #e74c3c;
+            font-size: 13px;
+            margin-top: 10px;
+            display: none;
+        }
 
         /* === 聊天页 === */
         #chat-page {
             display: none;
-            width: 500px;
+            width: 560px;
             max-width: 100vw;
             height: 90vh;
             background: #fff;
@@ -256,6 +262,7 @@
             <option value="闲聊">🎯 闲聊</option>
         </select>
         <button onclick="joinRoom()">开始聊天</button>
+        <div class="error-msg" id="login-error"></div>
     </div>
 
     <!-- 聊天页 -->
@@ -263,7 +270,7 @@
         <div class="chat-header">
             <div>
                 <div class="room-name" id="room-title">房间</div>
-                <div class="online-count" id="online-count">在线: 1</div>
+                <div class="online-count" id="online-count">在线: 0</div>
             </div>
             <button class="leave-btn" onclick="leaveRoom()">退出</button>
         </div>
@@ -278,7 +285,7 @@
         let ws;
         let myUsername;
         let myRoom;
-        let onlineCount = 0;
+        let membersInterval;
 
         // 根据用户名生成固定颜色头像
         const AVATAR_COLORS = [
@@ -326,7 +333,6 @@
                 return;
             }
 
-            // 普通消息
             const isSelf = username === myUsername;
             const time = formatTime(new Date());
             const color = getAvatarColor(username);
@@ -348,23 +354,67 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        function updateOnlineCount(delta) {
-            onlineCount = Math.max(0, onlineCount + delta);
-            document.getElementById("online-count").textContent = "在线: " + onlineCount;
+        // 轮询在线成员
+        async function fetchMembers() {
+            try {
+                const res = await fetch(`/api/rooms/${encodeURIComponent(myRoom)}/members`);
+                if (!res.ok) return;
+                const members = await res.json();
+                document.getElementById("online-count").textContent = `在线: ${members.length}`;
+            } catch (e) {}
         }
 
-        function joinRoom() {
-            myUsername = document.getElementById("username").value.trim();
-            myRoom = document.getElementById("room-select").value;
-            if (!myUsername) { alert("请输入昵称"); return; }
+        function startPollingMembers() {
+            fetchMembers();
+            membersInterval = setInterval(fetchMembers, 5000);
+        }
 
-            ws = new WebSocket("ws://localhost:3000/ws");
+        function stopPollingMembers() {
+            clearInterval(membersInterval);
+        }
+
+        // 登录并连接
+        async function joinRoom() {
+            const username = document.getElementById("username").value.trim();
+            myRoom = document.getElementById("room-select").value;
+            if (!username) { alert("请输入昵称"); return; }
+
+            const errorDiv = document.getElementById("login-error");
+            errorDiv.style.display = "none";
+
+            // 1. 登录拿 token
+            let res;
+            try {
+                res = await fetch("/api/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username }),
+                });
+            } catch (e) {
+                errorDiv.textContent = "网络错误，请检查服务是否启动";
+                errorDiv.style.display = "block";
+                return;
+            }
+
+            if (!res.ok) {
+                errorDiv.textContent = "登录失败: " + await res.text();
+                errorDiv.style.display = "block";
+                return;
+            }
+
+            const data = await res.json();
+            const token = data.token;
+            myUsername = username;
+
+            // 2. 用 token 连 WS
+            const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+            ws = new WebSocket(`${protocol}//${location.host}/ws?token=${token}`);
 
             ws.onopen = () => {
                 ws.send(JSON.stringify({
-                    username: myUsername,
+                    username: "",
                     room: myRoom,
-                    content: ""
+                    content: "",
                 }));
             };
 
@@ -376,8 +426,8 @@
                     appendMessage("error", "", msg.content);
                 } else if (msg.content.includes("加入房间") || msg.content.includes("离开了房间")) {
                     appendMessage("system", "", msg.content);
-                    if (msg.content.includes("加入房间")) updateOnlineCount(1);
-                    if (msg.content.includes("离开了房间")) updateOnlineCount(-1);
+                    // 延迟一下再刷新成员列表，让服务端先更新
+                    setTimeout(fetchMembers, 300);
                 } else {
                     appendMessage("message", msg.username, msg.content);
                 }
@@ -385,19 +435,22 @@
 
             ws.onclose = () => {
                 appendMessage("system", "", "连接已断开");
+                stopPollingMembers();
             };
 
             document.getElementById("login-page").style.display = "none";
             document.getElementById("chat-page").style.display = "flex";
             document.getElementById("room-title").textContent = myRoom;
+
+            startPollingMembers();
         }
 
         function leaveRoom() {
             if (ws) ws.close();
+            stopPollingMembers();
             document.getElementById("chat-page").style.display = "none";
             document.getElementById("login-page").style.display = "block";
             document.getElementById("messages").innerHTML = "";
-            onlineCount = 0;
         }
 
         function send() {
@@ -405,7 +458,7 @@
             const content = input.value.trim();
             if (!content || !ws) return;
             ws.send(JSON.stringify({
-                username: myUsername,
+                username: "",
                 room: myRoom,
                 content: content
             }));

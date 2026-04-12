@@ -10,10 +10,10 @@ use tracing::info;
 /// WebSocket 核心处理
 pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: String) {
     // 验证 token
-    let _ = match auth::verify_token(&token) {
+    let username = match auth::verify_token(&token) {
         Ok(name) => name,
         Err(_) => {
-            send_error(&mut socket, "无效的 token，请重新登录").await;
+            send_error(&mut socket, "无效的 token, 请重新登录").await;
             return;
         }
     };
@@ -23,7 +23,6 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: Strin
         None => return,
     };
 
-    let username = join_msg.username;
     let room = join_msg.room;
 
     let tx = match find_room(&state, &room, &mut socket).await {

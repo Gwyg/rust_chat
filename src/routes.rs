@@ -1,13 +1,35 @@
 use std::collections::HashMap;
 
 use axum::{
-    Json, extract::{Path, Query, State, WebSocketUpgrade}, response::Html
+    Json, Router, extract::{Path, Query, State, WebSocketUpgrade}, middleware::from_fn, response::Html, routing::{get, post}
 };
-use crate::state::AppState;
+use tower_http::services::ServeDir;
+use crate::{auth::auth_middleware, state::AppState};
 use crate::ws::handler_socket;
 use crate::models::{LoginRequest, LoginResponse};
 use crate::auth;
 use crate::db;
+
+pub fn app(state: AppState) -> Router {
+    // 公开路由（不需要登录）
+    let public = Router::new()
+        .route("/login", get(login_page))
+        .route("/api/login", post(login))
+        .with_state(state.clone());
+
+    // 受保护路由（需要登录，统一经过 auth_middleware）
+    let protected = Router::new()
+        .route("/", get(index))
+        .route("/ws", get(ws_handler))
+        .route("/api/rooms/:room/members", get(room_members))
+        .route_layer(from_fn(auth_middleware))
+        .with_state(state.clone());
+
+    let app = public
+        .merge(protected)
+        .nest_service("/static", ServeDir::new("static"));
+    app
+}
 
 pub async fn index() -> Html<&'static str> {
     Html(include_str!("../static/index.html"))
@@ -54,4 +76,8 @@ pub async fn room_members(
         })
         .unwrap_or_default();
     Json(members)
+}
+
+pub async fn login_page() -> Html<&'static str> {
+    Html(include_str!("../static/login.html"))
 }
