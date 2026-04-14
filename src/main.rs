@@ -1,9 +1,9 @@
+mod auth;
 mod db;
 mod models;
 mod routes;
 mod state;
 mod ws;
-mod auth;
 
 use state::AppState;
 use tracing::info;
@@ -29,7 +29,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
         .expect("bind failed");
-    info!("服务启动: http://localhost:3000");
+    info!("服务启动: http://127.0.0.1:3000");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -46,5 +46,3 @@ async fn shutdown_signal() {
     ctrl_c.await;
     info!("收到关闭信号，正在停止服务");
 }
-
-

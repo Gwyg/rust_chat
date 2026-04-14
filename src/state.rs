@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
 use crate::db::DbPool;
 use crate::models::ClientMessage;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::{RwLock, broadcast};
 
 pub type RoomMap = Arc<RwLock<HashMap<String, broadcast::Sender<ClientMessage>>>>;
 pub type OnlineMap = Arc<RwLock<HashMap<String, HashSet<String>>>>;
@@ -11,7 +11,7 @@ pub type OnlineMap = Arc<RwLock<HashMap<String, HashSet<String>>>>;
 pub struct AppState {
     pub rooms: RoomMap,
     pub db: DbPool,
-    pub online: OnlineMap, 
+    pub online: OnlineMap,
 }
 
 impl AppState {
@@ -30,5 +30,4 @@ impl AppState {
             rooms.insert(name.to_string(), tx);
         }
     }
-
 }

@@ -1,11 +1,15 @@
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use serde::{Deserialize, Serialize};
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
 use axum::{
-    extract::{Request},
+    extract::Request,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use serde::{Deserialize, Serialize};
 
 const SECRET: &[u8] = b"chat_secret_key"; // 后续可改成配置项
 
@@ -39,6 +43,28 @@ pub fn verify_token(token: &str) -> anyhow::Result<String> {
     Ok(data.claims.username)
 }
 
+/// 用 argon2 哈希密码
+pub fn hash_password(password: &str) -> anyhow::Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| anyhow::anyhow!("hash password failed: {e}"))?;
+    Ok(hash.to_string())
+}
+
+/// 验证密码
+pub fn verify_password(password: &str, hash: &str) -> anyhow::Result<bool> {
+    let parsed_hash =
+        PasswordHash::new(hash).map_err(|e| anyhow::anyhow!("parse hash failed: {e}"))?;
+    let argon2 = Argon2::default();
+    match argon2.verify_password(password.as_bytes(), &parsed_hash) {
+        Ok(()) => Ok(true),
+        Err(argon2::password_hash::Error::Password) => Ok(false),
+        Err(e) => Err(anyhow::anyhow!("verify password failed: {e}")),
+    }
+}
+
 /// 从请求中提取 token（先找 Cookie，再找 Authorization header）
 fn extract_token(request: &Request) -> Option<String> {
     // 从 Cookie 找
@@ -66,10 +92,7 @@ fn extract_token(request: &Request) -> Option<String> {
 /// 认证中间件：保护需要登录的路由
 /// - 浏览器页面请求（Accept: text/html）→ 302 跳转 /login
 /// - API 请求 → 401 JSON
-pub async fn auth_middleware(
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn auth_middleware(request: Request, next: Next) -> Response {
     let token = extract_token(&request);
 
     let is_browser = request
@@ -84,29 +107,25 @@ pub async fn auth_middleware(
             Ok(_) => next.run(request).await,
             Err(_) => {
                 if is_browser {
-                    (
-                        StatusCode::FOUND,
-                        [("Location", "/login")],
-                    ).into_response()
+                    (StatusCode::FOUND, [("Location", "/login")]).into_response()
                 } else {
                     (
                         StatusCode::UNAUTHORIZED,
                         axum::Json(serde_json::json!({ "error": "token 已过期，请重新登录" })),
-                    ).into_response()
+                    )
+                        .into_response()
                 }
             }
         },
         None => {
             if is_browser {
-                (
-                    StatusCode::FOUND,
-                    [("Location", "/login")],
-                ).into_response()
+                (StatusCode::FOUND, [("Location", "/login")]).into_response()
             } else {
                 (
                     StatusCode::UNAUTHORIZED,
                     axum::Json(serde_json::json!({ "error": "未登录" })),
-                ).into_response()
+                )
+                    .into_response()
             }
         }
     }

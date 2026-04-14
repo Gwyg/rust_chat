@@ -18,14 +18,12 @@ pub async fn save_message(
     room: &str,
     content: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        "INSERT INTO messages (username, room, content) VALUES (?, ?, ?)",
-    )
-    .bind(username)
-    .bind(room)
-    .bind(content)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO messages (username, room, content) VALUES (?, ?, ?)")
+        .bind(username)
+        .bind(room)
+        .bind(content)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -53,11 +51,31 @@ pub async fn get_room_history(
 
     Ok(messages.into_iter().rev().collect())
 }
-
-pub async fn ensure_user(pool: &DbPool, username: &str) -> anyhow::Result<()> {
-    sqlx::query("INSERT OR IGNORE INTO users (username) VALUES (?)")
+/// 注册用户，成功返回 true，用户名已存在返回 false
+pub async fn register_user(
+    pool: &DbPool,
+    username: &str,
+    password_hash: &str,
+) -> anyhow::Result<bool> {
+    let result = sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
         .bind(username)
+        .bind(password_hash)
         .execute(pool)
+        .await;
+
+    match result {
+        Ok(_) => Ok(true),
+        Err(sqlx::Error::Database(e)) if e.message().contains("UNIQUE") => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// 获取用户的密码哈希
+pub async fn get_password_hash(pool: &DbPool, username: &str) -> anyhow::Result<Option<String>> {
+    let row = sqlx::query("SELECT password_hash FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
         .await?;
-    Ok(())
+
+    Ok(row.and_then(|r| r.try_get("password_hash").ok()))
 }

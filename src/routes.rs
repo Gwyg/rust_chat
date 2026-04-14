@@ -1,20 +1,30 @@
 use std::collections::HashMap;
 
-use axum::{
-    Json, Router, extract::{Path, Query, State, WebSocketUpgrade}, middleware::from_fn, response::Html, routing::{get, post}
-};
-use tower_http::services::ServeDir;
-use crate::{auth::auth_middleware, state::AppState};
-use crate::ws::handler_socket;
-use crate::models::{LoginRequest, LoginResponse};
 use crate::auth;
 use crate::db;
+use crate::models::{LoginRequest, LoginResponse};
+use crate::ws::handler_socket;
+use crate::{
+    auth::{auth_middleware, hash_password, verify_password},
+    models::{RegisterRequest, RegisterResponse},
+    state::AppState,
+};
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State, WebSocketUpgrade},
+    middleware::from_fn,
+    response::Html,
+    routing::{get, post},
+};
+use tower_http::services::ServeDir;
 
 pub fn app(state: AppState) -> Router {
     // 公开路由（不需要登录）
     let public = Router::new()
         .route("/login", get(login_page))
         .route("/api/login", post(login))
+        .route("/register", get(register_page))
+        .route("/api/register", post(register))
         .with_state(state.clone());
 
     // 受保护路由（需要登录，统一经过 auth_middleware）
@@ -47,19 +57,112 @@ pub async fn ws_handler(
 pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, String> {
+) -> Result<Json<LoginResponse>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let username = payload.username.trim().to_string();
     if username.is_empty() {
-        return Err("用户名不能为空".into());
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "用户名不能为空" })),
+        ));
+    }
+    if payload.password.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "密码不能为空" })),
+        ));
     }
 
-    // 确保用户存在于数据库
-    db::ensure_user(&state.db, &username)
+    let hash = db::get_password_hash(&state.db, &username)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
 
-    let token = auth::sign_token(&username).map_err(|e| e.to_string())?;
+    let hash = match hash {
+        Some(h) => h,
+        None => {
+            return Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "用户名或密码错误" })),
+            ));
+        }
+    };
+
+    let password_ok = verify_password(&payload.password, &hash).map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    if !password_ok {
+        return Err((
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "用户名或密码错误" })),
+        ));
+    }
+
+    let token = auth::sign_token(&username).map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
     Ok(Json(LoginResponse { token }))
+}
+pub async fn register(
+    State(state): State<AppState>,
+    Json(payload): Json<RegisterRequest>,
+) -> Result<Json<RegisterResponse>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let username = payload.username.trim().to_string();
+    if username.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "用户名不能为空" })),
+        ));
+    }
+    if payload.password.len() < 6 {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "密码至少 6 个字符" })),
+        ));
+    }
+
+    let password_hash = hash_password(&payload.password).map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    let created = db::register_user(&state.db, &username, &password_hash)
+        .await
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    if !created {
+        return Err((
+            axum::http::StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "用户名已被占用" })),
+        ));
+    }
+
+    let token = auth::sign_token(&username).map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    Ok(Json(RegisterResponse { token }))
 }
 
 pub async fn room_members(
@@ -80,4 +183,8 @@ pub async fn room_members(
 
 pub async fn login_page() -> Html<&'static str> {
     Html(include_str!("../static/login.html"))
+}
+
+pub async fn register_page() -> Html<&'static str> {
+    Html(include_str!("../static/register.html"))
 }
