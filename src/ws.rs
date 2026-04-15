@@ -123,6 +123,7 @@ async fn broadcast_system(tx: &broadcast::Sender<ClientMessage>, room: &str, con
         username: "系统".into(),
         room: room.into(),
         content: content.into(),
+        msg_type: "message".into(),
     }) {
         tracing::error!("广播消息发送失败: {}", e);
     }
@@ -172,29 +173,85 @@ async fn find_room(
 }
 
 /// 处理单条客户端消息
-async fn handle_client_message(state: &AppState, text: &str, username: &str, room: &str) {
+// 在主循环里，修改消息处理逻辑
+async fn handle_client_message(state: &AppState, text: &str, username: &str, _room: &str) {
     match serde_json::from_str::<ClientMessage>(text) {
         Ok(m) => {
-            let tx = {
-                let rooms = state.rooms.read().await;
-                rooms.get(room).cloned()
-            };
-            if let Some(tx) = tx {
-                if let Err(e) = tx.send(ClientMessage {
-                    username: username.into(),
-                    room: room.into(),
-                    content: m.content.clone(),
-                }) {
-                    tracing::error!("广播消息发送失败: {}", e);
-                } else {
-                    if let Err(e) = db::save_message(&state.db, &username, &room, &m.content).await
-                    {
-                        tracing::error!("保存消息失败: {}", e);
+            match m.msg_type.as_str() {
+                "message" => {
+                    // 原有群聊逻辑不变
+                    let tx = {
+                        let rooms = state.rooms.read().await;
+                        rooms.get(_room).cloned()
+                    };
+                    if let Some(tx) = tx {
+                        if let Err(e) = tx.send(ClientMessage {
+                            msg_type: "message".into(),
+                            username: username.into(),
+                            room: _room.into(),
+                            content: m.content.clone(),
+                        }) {
+                            tracing::error!("广播消息失败: {}", e);
+                        } else {
+                            if let Err(e) = db::save_message(&state.db, username, &_room, &m.content).await {
+                                tracing::error!("保存消息失败: {}", e);
+                            }
+                        }
                     }
                 }
+                "private" => {
+                    // 私聊逻辑
+                    let target = m.room.clone(); // room 字段复用为 target 用户名
+                    let conv_id = format!(
+                        "{}_{}",
+                        username.min(&target),
+                        username.max(&target)
+                    );
+
+                    // 查找或创建私聊 channel
+                    let tx = {
+                        let rooms = state.rooms.read().await;
+                        rooms.get(&conv_id).cloned()
+                    };
+
+                    let tx = if let Some(tx) = tx {
+                        tx
+                    } else {
+                        // 创建新的私聊通道
+                        let (tx, _) = broadcast::channel(64);
+                        {
+                            let mut rooms = state.rooms.write().await;
+                            rooms.insert(conv_id.clone(), tx.clone());
+                        }
+                        // 初始化 online 记录（只记录当前用户）
+                        let mut online = state.online.write().await;
+                        online.entry(conv_id.clone()).or_default().insert(username.into());
+                        tx
+                    };
+
+                    // 确保对方也在 online 中
+                    {
+                        let mut online = state.online.write().await;
+                        online.entry(conv_id.clone()).or_default().insert(target.clone());
+                    }
+
+                    // 广播
+                    let _ = tx.send(ClientMessage {
+                        msg_type: "private".into(),
+                        username: username.into(),
+                        room: conv_id.clone(),
+                        content: m.content.clone(),
+                    });
+
+                    // 持久化
+                    if let Err(e) = db::save_private_message(&state.db, username, &conv_id, &m.content).await {
+                        tracing::error!("保存私聊消息失败: {}", e);
+                    }
+                }
+                _ => {}
             }
         }
-        Err(_) => {} // 格式错误的消息静默丢弃
+        Err(_) => {}
     }
 }
 /// 将广播消息转发给客户端

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::auth;
 use crate::db;
+use crate::models::ConversationItem;
 use crate::models::{LoginRequest, LoginResponse};
 use crate::ws::handler_socket;
 use crate::{
@@ -9,8 +10,10 @@ use crate::{
     models::{RegisterRequest, RegisterResponse},
     state::AppState,
 };
+use axum::response::IntoResponse;
 use axum::{
     Json, Router,
+    http::StatusCode,
     extract::{Path, Query, State, WebSocketUpgrade},
     middleware::from_fn,
     response::Html,
@@ -32,6 +35,8 @@ pub fn app(state: AppState) -> Router {
         .route("/", get(index))
         .route("/ws", get(ws_handler))
         .route("/api/rooms/:room/members", get(room_members))
+        .route("/api/conversations", get(get_conversations)) // 新增
+        .route("/api/private/:target/history", get(private_history)) // 新增
         .route_layer(from_fn(auth_middleware))
         .with_state(state.clone());
 
@@ -43,6 +48,44 @@ pub fn app(state: AppState) -> Router {
 
 pub async fn index() -> Html<&'static str> {
     Html(include_str!("../static/index.html"))
+}
+
+// 新增 handler
+pub async fn get_conversations(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Vec<ConversationItem>> {
+    let username = params.get("username").cloned().unwrap_or_default();
+    match db::get_user_conversations(&state.db, &username).await {
+        Ok(list) => Json(list),
+        Err(e) => {
+            tracing::error!("获取会话列表失败: {}", e);
+            Json(vec![])
+        }
+    }
+}
+
+pub async fn private_history(
+    State(state): State<AppState>,
+    Path(target): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let username = params.get("username").cloned().unwrap_or_default();
+    let u_ref = username.as_str();
+    let t_ref = target.as_str();
+    
+    let conv_id = if u_ref <= t_ref {
+        format!("{}_{}", u_ref, t_ref)
+    } else {
+        format!("{}_{}", t_ref, u_ref)
+    };
+    match db::get_private_history(&state.db, &conv_id, 50).await {
+        Ok(msgs) => (StatusCode::OK, Json(msgs)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ).into_response(),
+    }
 }
 
 pub async fn ws_handler(
