@@ -81,30 +81,6 @@ pub async fn get_password_hash(pool: &DbPool, username: &str) -> anyhow::Result<
     Ok(row.and_then(|r| r.try_get("password_hash").ok()))
 }
 
-/// 获取或创建私聊会话，返回 conv_id
-pub async fn get_or_create_private_conv(
-    pool: &DbPool,
-    user_a: &str,
-    user_b: &str,
-) -> anyhow::Result<String> {
-    // 排序保证唯一性
-    let (a, b) = if user_a < user_b {
-        (user_a, user_b)
-    } else {
-        (user_b, user_a)
-    };
-    let conv_id = format!("{}_{}", a, b);
-
-    sqlx::query(
-        "INSERT OR IGNORE INTO conversations (conv_id, type) VALUES (?, 'private')"
-    )
-    .bind(&conv_id)
-    .execute(pool)
-    .await?;
-
-    Ok(conv_id)
-}
-
 /// 保存私聊消息（写入 messages 表，带 conversation_id）
 pub async fn save_private_message(
     pool: &DbPool,

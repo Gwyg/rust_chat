@@ -147,7 +147,7 @@
                 }
 
                 // 设置 Cookie，30 天过期
-                document.cookie = `chat_token=${data.token}; path=/; max-age=2592000`;
+                document.cookie = `chat_token=${data.token}; path=/; max-age=3600`;
                 window.location.href = '/';
             } catch (err) {
                 errorMsg.textContent = '网络错误，请稍后重试';

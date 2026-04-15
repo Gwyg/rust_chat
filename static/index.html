@@ -16,8 +16,8 @@
             justify-content: center;
         }
 
-        /* === 登录页 === */
-        #login-page {
+        /* === 房间选择页 === */
+        #room-picker {
             background: #fff;
             padding: 40px;
             border-radius: 16px;
@@ -25,32 +25,28 @@
             text-align: center;
             width: 360px;
         }
-        #login-page h2 { margin-bottom: 8px; color: #1a1a2e; }
-        #login-page p { color: #888; font-size: 14px; margin-bottom: 24px; }
-        #login-page input {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e8e8e8;
-            border-radius: 10px;
-            font-size: 15px;
-            outline: none;
-            transition: border-color 0.2s;
+        #room-picker h2 { margin-bottom: 8px; color: #1a1a2e; }
+        #room-picker p { color: #888; font-size: 14px; margin-bottom: 24px; }
+        .room-options {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 20px;
         }
-        #login-page input:focus { border-color: #6c63ff; }
-        #login-page select {
-            width: 100%;
-            padding: 12px 16px;
+        .room-option {
+            padding: 14px 16px;
             border: 2px solid #e8e8e8;
             border-radius: 10px;
-            font-size: 15px;
-            outline: none;
-            margin-top: 12px;
-            background: #fff;
             cursor: pointer;
+            font-size: 15px;
+            transition: all 0.2s;
+            text-align: left;
         }
-        #login-page button {
+        .room-option:hover { border-color: #6c63ff; background: #f8f7ff; }
+        .room-option.selected { border-color: #6c63ff; background: #f0eeff; }
+        .room-option input { display: none; }
+        .room-picker-btn {
             width: 100%;
-            margin-top: 20px;
             padding: 12px;
             background: #6c63ff;
             color: #fff;
@@ -61,8 +57,9 @@
             cursor: pointer;
             transition: background 0.2s;
         }
-        #login-page button:hover { background: #5a52d5; }
-        #login-page .error-msg {
+        .room-picker-btn:hover { background: #5a52d5; }
+        .room-picker-btn:disabled { background: #b0aac8; cursor: not-allowed; }
+        .picker-error {
             color: #e74c3c;
             font-size: 13px;
             margin-top: 10px;
@@ -246,23 +243,31 @@
         /* 响应式 */
         @media (max-width: 540px) {
             #chat-page { width: 100vw; height: 100vh; border-radius: 0; }
-            #login-page { width: calc(100vw - 32px); }
+            #room-picker { width: calc(100vw - 32px); }
         }
     </style>
 </head>
 <body>
-    <!-- 登录页 -->
-    <div id="login-page">
-        <h2>💬 加入聊天</h2>
-        <p>输入昵称，选择一个房间开始聊天</p>
-        <input id="username" placeholder="你的昵称" maxlength="20" />
-        <select id="room-select">
-            <option value="Java群">☕ Java群</option>
-            <option value="Rust群">🦀 Rust群</option>
-            <option value="闲聊">🎯 闲聊</option>
-        </select>
-        <button onclick="joinRoom()">开始聊天</button>
-        <div class="error-msg" id="login-error"></div>
+    <!-- 房间选择页 -->
+    <div id="room-picker">
+        <h2>💬 选择聊天房间</h2>
+        <p>选择一个房间开始聊天</p>
+        <div class="room-options">
+            <label class="room-option selected" onclick="selectRoom(this)">
+                <input type="radio" name="room" value="Java群" checked />
+                ☕ Java群
+            </label>
+            <label class="room-option" onclick="selectRoom(this)">
+                <input type="radio" name="room" value="Rust群" />
+                🦀 Rust群
+            </label>
+            <label class="room-option" onclick="selectRoom(this)">
+                <input type="radio" name="room" value="闲聊" />
+                🎯 闲聊
+            </label>
+        </div>
+        <button class="room-picker-btn" onclick="enterRoom()">进入聊天</button>
+        <div class="picker-error" id="picker-error"></div>
     </div>
 
     <!-- 聊天页 -->
@@ -286,6 +291,12 @@
         let myUsername;
         let myRoom;
         let membersInterval;
+
+        // 工具函数：读取 Cookie
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+            return match ? match[2] : null;
+        }
 
         // 根据用户名生成固定颜色头像
         const AVATAR_COLORS = [
@@ -354,6 +365,12 @@
             container.scrollTop = container.scrollHeight;
         }
 
+        // 房间选择高亮
+        function selectRoom(el) {
+            document.querySelectorAll('.room-option').forEach(e => e.classList.remove('selected'));
+            el.classList.add('selected');
+        }
+
         // 轮询在线成员
         async function fetchMembers() {
             try {
@@ -373,48 +390,39 @@
             clearInterval(membersInterval);
         }
 
-        // 登录并连接
-        async function joinRoom() {
-            const username = document.getElementById("username").value.trim();
-            myRoom = document.getElementById("room-select").value;
-            if (!username) { alert("请输入昵称"); return; }
+        // 进入房间
+        async function enterRoom() {
+            const token = getCookie("chat_token");
+            if (!token) {
+                window.location.href = "/login";
+                return;
+            }
 
-            const errorDiv = document.getElementById("login-error");
+            const selected = document.querySelector('input[name="room"]:checked');
+            myRoom = selected.value;
+
+            // 从 token 中解析 username（JWT payload base64）
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                myUsername = payload.username;
+            } catch (e) {
+                showError("token 解析失败，请重新登录");
+                return;
+            }
+
+            const errorDiv = document.getElementById("picker-error");
             errorDiv.style.display = "none";
 
-            // 1. 登录拿 token
-            let res;
-            try {
-                res = await fetch("/api/login", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ username }),
-                });
-            } catch (e) {
-                errorDiv.textContent = "网络错误，请检查服务是否启动";
-                errorDiv.style.display = "block";
-                return;
-            }
-
-            if (!res.ok) {
-                errorDiv.textContent = "登录失败: " + await res.text();
-                errorDiv.style.display = "block";
-                return;
-            }
-
-            const data = await res.json();
-            const token = data.token;
-            myUsername = username;
-
-            // 2. 用 token 连 WS
             const protocol = location.protocol === "https:" ? "wss:" : "ws:";
             ws = new WebSocket(`${protocol}//${location.host}/ws?token=${token}`);
 
             ws.onopen = () => {
+                // 发送加入房间消息（带 msg_type）
                 ws.send(JSON.stringify({
-                    username: "",
+                    msg_type: "message",
+                    username: myUsername,
                     room: myRoom,
-                    content: "",
+                    content: ""
                 }));
             };
 
@@ -424,9 +432,8 @@
                     appendMessage("message", msg.username, msg.content);
                 } else if (msg.type === "error") {
                     appendMessage("error", "", msg.content);
-                } else if (msg.content.includes("加入房间") || msg.content.includes("离开了房间")) {
+                } else if (msg.username === "系统") {
                     appendMessage("system", "", msg.content);
-                    // 延迟一下再刷新成员列表，让服务端先更新
                     setTimeout(fetchMembers, 300);
                 } else {
                     appendMessage("message", msg.username, msg.content);
@@ -438,27 +445,36 @@
                 stopPollingMembers();
             };
 
-            document.getElementById("login-page").style.display = "none";
+            document.getElementById("room-picker").style.display = "none";
             document.getElementById("chat-page").style.display = "flex";
             document.getElementById("room-title").textContent = myRoom;
 
             startPollingMembers();
         }
 
+        function showError(msg) {
+            const errorDiv = document.getElementById("picker-error");
+            errorDiv.textContent = msg;
+            errorDiv.style.display = "block";
+        }
+
         function leaveRoom() {
             if (ws) ws.close();
             stopPollingMembers();
             document.getElementById("chat-page").style.display = "none";
-            document.getElementById("login-page").style.display = "block";
+            document.getElementById("room-picker").style.display = "block";
             document.getElementById("messages").innerHTML = "";
+            ws = null;
         }
 
         function send() {
             const input = document.getElementById("msg");
             const content = input.value.trim();
             if (!content || !ws) return;
+            // 修复：带上 msg_type = "message"
             ws.send(JSON.stringify({
-                username: "",
+                msg_type: "message",
+                username: myUsername,
                 room: myRoom,
                 content: content
             }));

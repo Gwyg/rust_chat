@@ -1,7 +1,7 @@
 mod auth;
 mod db;
+mod handlers;
 mod models;
-mod routes;
 mod state;
 mod ws;
 
@@ -12,10 +12,8 @@ use tracing::info;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    // 初始化数据库
     let pool = db::create_pool("chat.db").await.expect("数据库初始化失败");
 
-    // 运行迁移
     sqlx::migrate!("./data")
         .run(&pool)
         .await
@@ -24,7 +22,7 @@ async fn main() {
     let state = AppState::new(pool);
     state.init_rooms(vec!["Java群", "Rust群", "闲聊"]).await;
 
-    let app = routes::app(state);
+    let app = handlers::app(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await

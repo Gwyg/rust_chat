@@ -1,6 +1,8 @@
+-- 1. 基础表
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -9,5 +11,13 @@ CREATE TABLE IF NOT EXISTS messages (
     username TEXT NOT NULL,
     room TEXT NOT NULL,
     content TEXT NOT NULL,
+    conversation_id TEXT DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conv_id TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL DEFAULT 'private',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

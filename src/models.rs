@@ -1,28 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+// === WebSocket 消息 ===
+
 #[derive(Deserialize, Serialize, Clone)]
 pub struct ClientMessage {
-    pub msg_type: String,       // 新增: "message" | "private"
+    pub msg_type: String,
     pub username: String,
     pub room: String,
     pub content: String,
-}
-
-// 新增：私聊请求结构
-#[derive(Deserialize)]
-pub struct PrivateMessageRequest {
-    pub target: String,   // 对方用户名
-    pub content: String,
-}
-
-// 新增：会话列表项
-#[derive(Serialize)]
-pub struct ConversationItem {
-    pub conv_id: String,
-    pub conv_type: String,   // "private" | "group"
-    pub name: String,        // 私聊显示对方名字，群聊显示房间名
-    pub last_content: Option<String>,
-    pub last_time: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -32,6 +17,8 @@ pub struct ServerMessage {
     pub username: String,
     pub content: String,
 }
+
+// === API 请求/响应 ===
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -53,4 +40,15 @@ pub struct RegisterRequest {
 #[derive(Serialize)]
 pub struct RegisterResponse {
     pub token: String,
+}
+
+// === 业务模型 ===
+
+#[derive(Serialize)]
+pub struct ConversationItem {
+    pub conv_id: String,
+    pub conv_type: String,
+    pub name: String,
+    pub last_content: Option<String>,
+    pub last_time: Option<String>,
 }
