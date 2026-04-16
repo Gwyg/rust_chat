@@ -52,3 +52,14 @@ pub struct ConversationItem {
     pub last_content: Option<String>,
     pub last_time: Option<String>,
 }
+
+#[derive(Serialize)]
+pub struct FriendItem {
+    pub username: String,
+    pub status: String,   // "accepted" | "pending_send" | "pending_recv"
+}
+
+#[derive(Deserialize)]
+pub struct FriendRequest {
+    pub target: String,   // 对方用户名
+}

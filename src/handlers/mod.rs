@@ -1,14 +1,20 @@
 mod auth;
 mod chat;
+mod friends;
 mod ws;
 
 pub use auth::*;
 pub use chat::*;
+pub use friends::*;
 pub use ws::*;
 
 use crate::auth::middleware::auth_middleware;
 use crate::state::AppState;
-use axum::{Router, middleware::from_fn, routing::{get, post}};
+use axum::{
+    Router,
+    middleware::from_fn,
+    routing::{get, post},
+};
 use tower_http::services::ServeDir;
 
 pub fn app(state: AppState) -> Router {
@@ -23,11 +29,17 @@ pub fn app(state: AppState) -> Router {
         .route("/", get(index))
         .route("/ws", get(ws_handler))
         .route("/api/rooms/:room/members", get(room_members))
+        .route("/api/users", get(list_users))
         .route("/api/conversations", get(get_conversations))
         .route("/api/private/:target/history", get(private_history))
+        .route("/api/friends", get(list_friends))
+        .route("/api/friends/request", post(add_friend))
+        .route("/api/friends/accept", post(accept_friend))
+        .route("/api/friends/:target", axum::routing::delete(delete_friend))
         .route_layer(from_fn(auth_middleware))
         .with_state(state.clone());
 
-    public.merge(protected)
+    public
+        .merge(protected)
         .nest_service("/static", ServeDir::new("static"))
 }

@@ -71,6 +71,14 @@ pub async fn register_user(
     }
 }
 
+/// 获取所有用户名列表
+pub async fn get_all_users(pool: &DbPool) -> anyhow::Result<Vec<String>> {
+    let rows = sqlx::query("SELECT username FROM users ORDER BY username ASC")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.iter().map(|r| r.try_get("username").unwrap_or_default()).collect())
+}
+
 /// 获取用户的密码哈希
 pub async fn get_password_hash(pool: &DbPool, username: &str) -> anyhow::Result<Option<String>> {
     let row = sqlx::query("SELECT password_hash FROM users WHERE username = ?")
@@ -188,6 +196,114 @@ pub async fn get_user_conversations(
             last_content: row.try_get("last_content").ok(),
             last_time: None,
         });
+    }
+
+    Ok(items)
+}
+
+// ── 好友系统 ────────────────────────────
+
+/// 发送好友申请（已有则忽略）
+pub async fn send_friend_request(
+    pool: &DbPool,
+    from: &str,
+    to: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO friendships (from_user, to_user, status) VALUES (?, ?, 'pending')"
+    )
+    .bind(from)
+    .bind(to)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 接受好友申请
+pub async fn accept_friend(
+    pool: &DbPool,
+    from: &str,   // 申请发起人
+    to: &str,     // 当前用户（接受方）
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE friendships SET status = 'accepted' WHERE from_user = ? AND to_user = ?"
+    )
+    .bind(from)
+    .bind(to)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 删除好友 / 拒绝申请（双向删除）
+pub async fn delete_friend(
+    pool: &DbPool,
+    user_a: &str,
+    user_b: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "DELETE FROM friendships WHERE (from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?)"
+    )
+    .bind(user_a).bind(user_b)
+    .bind(user_b).bind(user_a)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 获取好友列表（含待处理申请）
+pub async fn get_friends(
+    pool: &DbPool,
+    username: &str,
+) -> anyhow::Result<Vec<crate::models::FriendItem>> {
+    // 我发出的申请
+    let sent = sqlx::query(
+        "SELECT to_user as other, status FROM friendships WHERE from_user = ?"
+    )
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+
+    // 我收到的申请
+    let recv = sqlx::query(
+        "SELECT from_user as other, status FROM friendships WHERE to_user = ?"
+    )
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+
+    let mut items = vec![];
+
+    for row in sent {
+        let other: String = row.try_get("other").unwrap_or_default();
+        let status: String = row.try_get("status").unwrap_or_default();
+        items.push(crate::models::FriendItem {
+            username: other,
+            status: if status == "accepted" {
+                "accepted".into()
+            } else {
+                "pending_send".into()   // 我发出、对方未处理
+            },
+        });
+    }
+
+    for row in recv {
+        let other: String = row.try_get("other").unwrap_or_default();
+        let status: String = row.try_get("status").unwrap_or_default();
+        if status == "accepted" {
+            // 双向已接受，可能在 sent 里已有，跳过重复
+            if !items.iter().any(|i| i.username == other) {
+                items.push(crate::models::FriendItem {
+                    username: other,
+                    status: "accepted".into(),
+                });
+            }
+        } else {
+            items.push(crate::models::FriendItem {
+                username: other,
+                status: "pending_recv".into(),  // 对方发来、我未处理
+            });
+        }
     }
 
     Ok(items)

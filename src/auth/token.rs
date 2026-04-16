@@ -13,7 +13,7 @@ pub fn sign_token(username: &str) -> anyhow::Result<String> {
     let exp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs() as usize
-        + 7 * 24 * 3600; // 7 天
+        + 1800; // 7 天
 
     let claims = Claims {
         username: username.to_string(),

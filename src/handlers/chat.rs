@@ -63,3 +63,15 @@ pub async fn private_history(
         .into_response(),
     }
 }
+
+pub async fn list_users(
+    State(state): State<AppState>,
+) -> Json<Vec<String>> {
+    match db::get_all_users(&state.db).await {
+        Ok(users) => Json(users),
+        Err(e) => {
+            tracing::error!("获取用户列表失败: {}", e);
+            Json(vec![])
+        }
+    }
+}
