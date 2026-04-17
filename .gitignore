@@ -1,3 +1,4 @@
 /target
 chat.db
-/.VSCodeCounter
+/.VSCodeCounter*
+vscodecounter.*
