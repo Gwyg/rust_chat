@@ -20,7 +20,7 @@ async fn main() {
         .expect("数据库迁移失败");
 
     let state = AppState::new(pool);
-    state.init_rooms(vec!["Java群", "Rust群", "闲聊"]).await;
+    state.restore_group_rooms().await;
 
     let app = handlers::app(state);
 

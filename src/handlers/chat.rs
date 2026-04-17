@@ -47,6 +47,8 @@ pub async fn private_history(
     let username = params.get("username").cloned().unwrap_or_default();
     let u_ref = username.as_str();
     let t_ref = target.as_str();
+    let before_id = params.get("before_id").and_then(|s| s.parse::<i64>().ok());
+    let limit: i64 = params.get("limit").and_then(|s| s.parse::<i64>().ok()).unwrap_or(50);
 
     let conv_id = if u_ref <= t_ref {
         format!("{}_{}", u_ref, t_ref)
@@ -54,8 +56,12 @@ pub async fn private_history(
         format!("{}_{}", t_ref, u_ref)
     };
 
-    match db::get_private_history(&state.db, &conv_id, 50).await {
-        Ok(msgs) => (StatusCode::OK, Json(msgs)).into_response(),
+    match db::get_private_history_paginated(&state.db, &conv_id, before_id, limit).await {
+        Ok(result) => (StatusCode::OK, Json(serde_json::json!({
+            "messages": result.messages,
+            "min_id": result.min_id,
+            "has_more": result.has_more,
+        }))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -73,5 +79,27 @@ pub async fn list_users(
             tracing::error!("获取用户列表失败: {}", e);
             Json(vec![])
         }
+    }
+}
+
+pub async fn room_history_paginated(
+    State(state): State<AppState>,
+    Path(room): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let before_id = params.get("before_id").and_then(|s| s.parse::<i64>().ok());
+    let limit: i64 = params.get("limit").and_then(|s| s.parse::<i64>().ok()).unwrap_or(50);
+
+    match db::get_room_history_paginated(&state.db, &room, before_id, limit).await {
+        Ok(result) => (StatusCode::OK, Json(serde_json::json!({
+            "messages": result.messages,
+            "min_id": result.min_id,
+            "has_more": result.has_more,
+        }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+        .into_response(),
     }
 }

@@ -23,11 +23,19 @@ impl AppState {
         }
     }
 
-    pub async fn init_rooms(&self, room_names: Vec<&str>) {
+    /// 服务启动时从数据库恢复所有群组的 broadcast channel
+    /// 防止重启后用户进群报「房间不存在」
+    pub async fn restore_group_rooms(&self) {
+        let group_ids: Vec<String> =
+            sqlx::query_scalar("SELECT group_id FROM groups")
+                .fetch_all(&self.db)
+                .await
+                .unwrap_or_default();
+
         let mut rooms = self.rooms.write().await;
-        for name in room_names {
+        for id in group_ids {
             let (tx, _) = broadcast::channel(64);
-            rooms.insert(name.to_string(), tx);
+            rooms.insert(id, tx);
         }
     }
 }

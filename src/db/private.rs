@@ -1,5 +1,5 @@
 use sqlx::Row;
-use crate::db::DbPool;
+use crate::db::{DbPool, PaginatedMessages};
 use crate::models::{ClientMessage, ConversationItem};
 
 pub async fn save_private_message(
@@ -18,33 +18,6 @@ pub async fn save_private_message(
     .execute(pool)
     .await?;
     Ok(())
-}
-
-pub async fn get_private_history(
-    pool: &DbPool,
-    conv_id: &str,
-    limit: i64,
-) -> anyhow::Result<Vec<ClientMessage>> {
-    let rows = sqlx::query(
-        "SELECT username, room as conv_id, content FROM messages
-         WHERE conversation_id = ? ORDER BY id DESC LIMIT ?"
-    )
-    .bind(conv_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    let messages: Vec<ClientMessage> = rows
-        .into_iter()
-        .map(|row| ClientMessage {
-            username: row.try_get("username").unwrap_or_default(),
-            room: row.try_get("conv_id").unwrap_or_default(),
-            content: row.try_get("content").unwrap_or_default(),
-            msg_type: "private".into(),
-        })
-        .collect();
-
-    Ok(messages.into_iter().rev().collect())
 }
 
 pub async fn get_user_conversations(
@@ -107,4 +80,61 @@ pub async fn get_user_conversations(
     }
 
     Ok(items)
+}
+
+pub async fn get_private_history_paginated(
+    pool: &DbPool,
+    conv_id: &str,
+    before_id: Option<i64>,
+    limit: i64,
+) -> anyhow::Result<PaginatedMessages> {
+    let actual_limit = limit + 1;
+    let rows = if let Some(before) = before_id {
+        sqlx::query(
+            "SELECT id, username, content FROM messages
+             WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+        )
+        .bind(conv_id)
+        .bind(before)
+        .bind(actual_limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, username, content FROM messages
+             WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+        )
+        .bind(conv_id)
+        .bind(actual_limit)
+        .fetch_all(pool)
+        .await?
+    };
+
+    let has_more = (rows.len() as i64) > limit;
+    let page_rows = if has_more { &rows[..(limit as usize)] } else { &rows[..] };
+
+    let mut messages: Vec<ClientMessage> = page_rows
+        .iter()
+        .map(|row| {
+            let id: i64 = row.try_get("id").unwrap_or(0);
+            ClientMessage {
+                username: row.try_get("username").unwrap_or_default(),
+                room: "".into(),
+                content: row.try_get("content").unwrap_or_default(),
+                msg_type: format!("private:{}", id),
+            }
+        })
+        .collect();
+    messages.reverse();
+
+    let min_id = if messages.is_empty() {
+        None
+    } else {
+        Some(page_rows.iter().map(|r| {
+            let id: i64 = r.try_get("id").unwrap_or(0);
+            id
+        }).min().unwrap_or(0))
+    };
+
+    Ok(PaginatedMessages { messages, min_id, has_more })
 }

@@ -3,7 +3,7 @@ use crate::models::{ClientMessage, ServerMessage};
 use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use tokio::sync::broadcast;
-use tracing::{error};
+use tracing::error;
 
 pub async fn handle_client_message(state: &AppState, text: &str, username: &str, room: &str) {
     match serde_json::from_str::<ClientMessage>(text) {
@@ -67,11 +67,27 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                 {
                     error!("保存私聊消息失败: {}", e);
                 }
+
+                // 如果目标用户不在线，保存为离线消息
+                let target_online = is_user_online(state, &target).await;
+                if !target_online {
+                    if let Err(e) = db::save_offline_message(
+                        &state.db, username, &target, &m.content
+                    ).await {
+                        error!("保存离线消息失败: {}", e);
+                    }
+                }
             }
             _ => {}
         },
         Err(_) => {}
     }
+}
+
+/// 检查用户是否在任意房间在线
+async fn is_user_online(state: &AppState, username: &str) -> bool {
+    let online = state.online.read().await;
+    online.values().any(|members| members.contains(username))
 }
 
 pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage) -> bool {

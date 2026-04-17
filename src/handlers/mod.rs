@@ -1,11 +1,13 @@
 mod auth;
 mod chat;
 mod friends;
+mod group;
 mod ws;
 
 pub use auth::*;
 pub use chat::*;
 pub use friends::*;
+pub use group::*;
 pub use ws::*;
 
 use crate::auth::middleware::auth_middleware;
@@ -13,7 +15,7 @@ use crate::state::AppState;
 use axum::{
     Router,
     middleware::from_fn,
-    routing::{get, post},
+    routing::{delete, get, post, put},
 };
 use tower_http::services::ServeDir;
 
@@ -32,10 +34,20 @@ pub fn app(state: AppState) -> Router {
         .route("/api/users", get(list_users))
         .route("/api/conversations", get(get_conversations))
         .route("/api/private/:target/history", get(private_history))
+        // 好友相关
         .route("/api/friends", get(list_friends))
         .route("/api/friends/request", post(add_friend))
         .route("/api/friends/accept", post(accept_friend))
-        .route("/api/friends/:target", axum::routing::delete(delete_friend))
+        .route("/api/friends/:target", delete(delete_friend))
+        // 群组相关（新增）
+        .route("/api/rooms/{room}/history", get(chat::room_history_paginated))
+        .route("/api/groups", get(list_groups).post(create_group))
+        .route("/api/groups/:group_id", delete(dissolve_group))
+        .route("/api/groups/:group_id/members", get(list_group_members))
+        .route("/api/groups/members/add", post(add_member))
+        .route("/api/groups/members/remove", post(remove_member))
+        .route("/api/groups/notice", put(update_notice))
+        .route("/api/groups/avatar", put(update_avatar))
         .route_layer(from_fn(auth_middleware))
         .with_state(state.clone());
 

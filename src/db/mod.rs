@@ -2,13 +2,20 @@ mod message;
 mod user;
 mod private;
 mod friend;
+mod group;          // ← 新增这一行
+mod offline;
+
 
 use sqlx::sqlite::SqlitePool;
 
+
+pub use offline::*;
+pub use group::*;
 pub use message::*;
 pub use user::*;
 pub use private::*;
 pub use friend::*;
+pub use message::PaginatedMessages;
 
 pub type DbPool = SqlitePool;
 
