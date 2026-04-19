@@ -2,14 +2,25 @@ mod message;
 
 use crate::auth::token::verify_token;
 use crate::db;
-use crate::models::{ClientMessage, ServerMessage};
+use crate::models::ClientMessage;
+use crate::models::{ServerMessage, UnreadItem, UnreadSummary};
 use crate::state::AppState;
-use crate::ws::message::{find_group_room, forward_to_client, handle_client_message, parse_join_message, send_error};
+use crate::ws::message::{find_group_room, forward_to_client, handle_client_message, send_error};
 use axum::extract::ws::{Message, WebSocket};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::interval;
 use tracing::{info, warn};
+
+// ── 会话状态 ────────────────────────────────────────────────────────────────
+
+struct SessionCtx {
+    current_group: Option<String>,
+    group_rx: Option<broadcast::Receiver<ClientMessage>>,
+    private_rx: Option<mpsc::Receiver<ClientMessage>>,
+}
+
+// ── 入口 ────────────────────────────────────────────────────────────────────
 
 pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: String) {
     // 1. 验证 token
@@ -21,127 +32,167 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: Strin
         }
     };
 
-    // 2. 等待客户端首条消息（决定初始会话类型）
-    let join_msg = match parse_join_message(&mut socket).await {
-        Some(msg) => msg,
-        None => return,
-    };
+    // 2. 上线即创建私聊 channel，与 WS 连接绑定，全程不销毁
+    let (private_tx, private_rx_init) = mpsc::channel::<ClientMessage>(64);
+    state
+        .private_rooms
+        .write()
+        .await
+        .insert(username.clone(), private_tx);
 
     // 3. 初始化会话状态
-    // current_group: 当前所在群组 ID，None 表示私聊模式
-    let mut current_group: Option<String> = None;
-    // group_rx: 群聊广播接收端
-    let mut group_rx: Option<broadcast::Receiver<ClientMessage>> = None;
-    // private_rx: 私聊 mpsc 接收端（上线时创建，下线时 drop）
-    let mut private_rx: Option<mpsc::Receiver<ClientMessage>> = None;
+    let mut ctx = SessionCtx {
+        current_group: None,
+        group_rx: None,
+        private_rx: Some(private_rx_init),
+    };
 
-    // 4. 处理首条消息，进入初始会话
-    if !do_switch(
-        &mut socket, &state, &username,
-        &join_msg.msg_type, &join_msg.room,
-        &mut current_group, &mut group_rx, &mut private_rx,
-    ).await {
-        return;
-    }
-
-    // 5. 推送离线消息
+    // 4. 推送离线消息
     deliver_offline(&mut socket, &state, &username).await;
 
-    // 6. 统一主循环
+    // 5. 主循环
     let mut heartbeat = interval(Duration::from_secs(30));
     heartbeat.tick().await;
 
     loop {
-        tokio::select! {
-            // 心跳
-            _ = heartbeat.tick() => {
-                if socket.send(Message::Ping(vec![].into())).await.is_err() {
-                    info!("用户 {} 心跳超时", username);
-                    break;
-                }
-            }
-
-            // 客户端发来消息
-            msg = socket.recv() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Ok(m) = serde_json::from_str::<ClientMessage>(&text) {
-                            if m.msg_type == "switch" || m.msg_type == "switch_private" {
-                                // 离开当前房间
-                                leave_group(&state, &username, &current_group).await;
-                                // 切换会话
-                                if !do_switch(
-                                    &mut socket, &state, &username,
-                                    &m.msg_type, &m.room,
-                                    &mut current_group, &mut group_rx, &mut private_rx,
-                                ).await {
-                                    break;
-                                }
-                            } else {
-                                let room_str = current_group.as_deref().unwrap_or("");
-                                handle_client_message(&state, &text, &username, room_str).await;
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Pong(_))) => {}
-                    _ => {
-                        info!("用户 {} 断开连接", username);
-                        break;
-                    }
-                }
-            }
-
-            // 收群聊广播消息
-            msg = async {
-                match group_rx.as_mut() {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                match msg {
-                    Ok(client_msg) => {
-                        if !forward_to_client(&mut socket, client_msg).await {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("用户 {} 丢失 {} 条群聊消息", username, n);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-
-            // 收私聊 mpsc 消息
-            msg = async {
-                match private_rx.as_mut() {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                match msg {
-                    Some(client_msg) => {
-                        if !forward_to_client(&mut socket, client_msg).await {
-                            break;
-                        }
-                    }
-                    // mpsc recv 返回 None 说明所有 Sender 都 drop 了
-                    None => {
-                        warn!("用户 {} 私聊 channel 已关闭", username);
-                        break;
-                    }
-                }
-            }
+        if !run_once(&mut socket, &state, &username, &mut ctx, &mut heartbeat).await {
+            break;
         }
     }
 
-    // 7. 断线清理
-    leave_group(&state, &username, &current_group).await;
-    // 移除私聊 Sender，rx 随 loop 结束自动 drop
+    // 6. 断线清理
+    leave_group(&state, &username, &ctx.current_group).await;
     state.private_rooms.write().await.remove(&username);
     info!("用户 {} 下线", username);
 }
 
-/// 切换会话（群聊 or 私聊），更新 current_group / group_rx / private_rx
+// ── 主循环单次轮询 ───────────────────────────────────────────────────────────
+
+async fn run_once(
+    socket: &mut WebSocket,
+    state: &AppState,
+    username: &str,
+    ctx: &mut SessionCtx,
+    heartbeat: &mut tokio::time::Interval,
+) -> bool {
+    tokio::select! {
+        _ = heartbeat.tick() => {
+            handle_heartbeat(socket, username).await
+        }
+        msg = socket.recv() => {
+            handle_socket_msg(socket, state, username, ctx, msg).await
+        }
+        msg = recv_group(&mut ctx.group_rx) => {
+            handle_group_msg(socket, username, msg).await
+        }
+        msg = recv_private(&mut ctx.private_rx) => {
+            handle_private_msg(socket, username, msg).await
+        }
+    }
+}
+
+// ── 心跳 ────────────────────────────────────────────────────────────────────
+
+async fn handle_heartbeat(socket: &mut WebSocket, username: &str) -> bool {
+    if socket.send(Message::Ping(vec![].into())).await.is_err() {
+        info!("用户 {} 心跳超时", username);
+        return false;
+    }
+    true
+}
+
+// ── 客户端发来消息 ───────────────────────────────────────────────────────────
+
+async fn handle_socket_msg(
+    socket: &mut WebSocket,
+    state: &AppState,
+    username: &str,
+    ctx: &mut SessionCtx,
+    msg: Option<Result<Message, axum::Error>>,
+) -> bool {
+    match msg {
+        Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
+            Ok(m) if m.msg_type == "switch" || m.msg_type == "switch_private" => {
+                leave_group(state, username, &ctx.current_group).await;
+                do_switch(
+                    socket,
+                    state,
+                    username,
+                    &m.msg_type,
+                    &m.room,
+                    &mut ctx.current_group,
+                    &mut ctx.group_rx,
+                )
+                .await
+            }
+            Ok(_) => {
+                let room_str = ctx.current_group.as_deref().unwrap_or("");
+                handle_client_message(state, &text, username, room_str).await;
+                true
+            }
+            Err(_) => true,
+        },
+        Some(Ok(Message::Pong(_))) => true,
+        _ => {
+            info!("用户 {} 断开连接", username);
+            false
+        }
+    }
+}
+
+// ── 群聊消息接收与处理 ───────────────────────────────────────────────────────
+
+async fn recv_group(
+    group_rx: &mut Option<broadcast::Receiver<ClientMessage>>,
+) -> Result<ClientMessage, broadcast::error::RecvError> {
+    match group_rx.as_mut() {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn handle_group_msg(
+    socket: &mut WebSocket,
+    username: &str,
+    msg: Result<ClientMessage, broadcast::error::RecvError>,
+) -> bool {
+    match msg {
+        Ok(client_msg) => forward_to_client(socket, client_msg).await,
+        Err(broadcast::error::RecvError::Lagged(n)) => {
+            warn!("用户 {} 丢失 {} 条群聊消息", username, n);
+            true
+        }
+        Err(broadcast::error::RecvError::Closed) => false,
+    }
+}
+
+// ── 私聊消息接收与处理 ───────────────────────────────────────────────────────
+
+async fn recv_private(
+    private_rx: &mut Option<mpsc::Receiver<ClientMessage>>,
+) -> Option<ClientMessage> {
+    match private_rx.as_mut() {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn handle_private_msg(
+    socket: &mut WebSocket,
+    username: &str,
+    msg: Option<ClientMessage>,
+) -> bool {
+    match msg {
+        Some(client_msg) => forward_to_client(socket, client_msg).await,
+        None => {
+            warn!("用户 {} 私聊 channel 已关闭", username);
+            false
+        }
+    }
+}
+
+// ── 切换会话 ────────────────────────────────────────────────────────────────
+
 async fn do_switch(
     socket: &mut WebSocket,
     state: &AppState,
@@ -150,18 +201,17 @@ async fn do_switch(
     room: &str,
     current_group: &mut Option<String>,
     group_rx: &mut Option<broadcast::Receiver<ClientMessage>>,
-    private_rx: &mut Option<mpsc::Receiver<ClientMessage>>,
 ) -> bool {
-    if msg_type == "switch_private" || msg_type == "private" {
-        // 切换到私聊模式
+    if msg_type == "switch_private" {
+        // 切换到私聊模式，清空群聊状态即可，私聊 channel 始终存在
         info!("用户 {} 切换到私聊模式", username);
-
-        // 创建个人 mpsc channel，tx 存 private_rooms，rx 留在 loop
-        let (tx, rx) = mpsc::channel::<ClientMessage>(64);
-        state.private_rooms.write().await.insert(username.to_string(), tx);
-
-        *private_rx = Some(rx);
-        *group_rx = None;         // 不再订阅群聊
+        let conv_id = {
+            let a = username.min(room);
+            let b = username.max(room);
+            format!("{}_{}", a, b)
+        };
+        deliver_offline_by_source(socket, state, username, &conv_id).await;
+        *group_rx = None;
         *current_group = None;
     } else {
         // 切换到群聊模式
@@ -172,26 +222,26 @@ async fn do_switch(
             None => return false,
         };
 
-        // 加入 online map
-        state.online.write().await
+        state
+            .online
+            .write()
+            .await
             .entry(room.to_string())
             .or_default()
             .insert(username.to_string());
 
         broadcast_system(&tx, room, &format!("用户 {} 加入房间", username)).await;
+        // 推送该群的离线消息
+        deliver_offline_by_source(socket, state, username, room).await;
 
         *group_rx = Some(tx.subscribe());
-        *private_rx = None;       // 不再监听私聊
         *current_group = Some(room.to_string());
-
-        // 切换到群聊后，从 private_rooms 移除（不再接收私聊实时推送）
-        // 注意：私聊消息仍会存 offline_messages，上线再推
-        state.private_rooms.write().await.remove(username);
     }
     true
 }
 
-/// 离开当前群组，清理 online map 并广播退出消息
+// ── 离开群组 ────────────────────────────────────────────────────────────────
+
 async fn leave_group(state: &AppState, username: &str, current_group: &Option<String>) {
     if let Some(room) = current_group {
         {
@@ -208,31 +258,50 @@ async fn leave_group(state: &AppState, username: &str, current_group: &Option<St
     }
 }
 
-/// 推送并清理离线消息
+// ── 离线消息推送 ─────────────────────────────────────────────────────────────
+
 async fn deliver_offline(socket: &mut WebSocket, state: &AppState, username: &str) {
-    if let Ok(offline) = db::get_offline_messages(&state.db, username).await {
-        if !offline.is_empty() {
-            for msg in &offline {
-                let server_msg = ServerMessage {
-                    msg_type: msg.msg_type.clone(),
-                    username: msg.username.clone(),
-                    content: format!("[离线消息] {}", msg.content),
-                    ..Default::default()
-                };
-                if socket
-                    .send(Message::Text(serde_json::to_string(&server_msg).unwrap()))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-            }
-            if let Err(e) = db::clear_offline_messages(&state.db, username).await {
-                warn!("清理离线消息失败: {}", e);
-            }
-        }
+    let Ok(summary) = db::get_unread_summary(&state.db, username).await else {
+        return;
+    };
+    if summary.is_empty() {
+        return;
     }
+
+    let items: Vec<UnreadItem> = summary
+        .into_iter()
+        .map(|(msg_type, source_id, count)| {
+            // 私聊的 source_id 是 conv_id（alice_bob），
+            // 前端需要知道对方是谁，从 conv_id 中解析出非自己的那个
+            let id = if msg_type == "private" {
+                // conv_id 格式：username_a_username_b（字典序）
+                source_id
+                    .split('_')
+                    .find(|&part| part != username)
+                    .unwrap_or(&source_id)
+                    .to_string()
+            } else {
+                source_id // group_id 直接用
+            };
+            UnreadItem {
+                item_type: msg_type,
+                id,
+                count,
+            }
+        })
+        .collect();
+
+    let msg = UnreadSummary {
+        msg_type: "unread_summary".into(),
+        items,
+    };
+
+    let _ = socket
+        .send(Message::Text(serde_json::to_string(&msg).unwrap()))
+        .await;
 }
+
+// ── 系统广播 ────────────────────────────────────────────────────────────────
 
 async fn broadcast_system(tx: &broadcast::Sender<ClientMessage>, room: &str, content: &str) {
     let _ = tx.send(ClientMessage {
@@ -242,4 +311,36 @@ async fn broadcast_system(tx: &broadcast::Sender<ClientMessage>, room: &str, con
         content: content.into(),
         ..Default::default()
     });
+}
+
+async fn deliver_offline_by_source(
+    socket: &mut WebSocket,
+    state: &AppState,
+    username: &str,
+    source_id: &str,
+) {
+    let Ok(msgs) = db::get_offline_messages_by_source(&state.db, username, source_id).await else {
+        return;
+    };
+    if msgs.is_empty() {
+        return;
+    }
+    for msg in &msgs {
+        let server_msg = ServerMessage {
+            msg_type: msg.msg_type.clone(),
+            username: msg.username.clone(),
+            content: format!("[离线消息] {}", msg.content),
+            ..Default::default()
+        };
+        if socket
+            .send(Message::Text(serde_json::to_string(&server_msg).unwrap()))
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+    if let Err(e) = db::clear_offline_messages_by_source(&state.db, username, source_id).await {
+        warn!("清理离线消息失败: {}", e);
+    }
 }

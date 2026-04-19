@@ -28,3 +28,17 @@ pub struct ServerMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UnreadItem {
+    #[serde(rename = "type")]
+    pub item_type: String,   // "group" 或 "private"
+    pub id: String,          // group_id 或对方 username
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UnreadSummary {
+    pub msg_type: String,    // 固定为 "unread_summary"
+    pub items: Vec<UnreadItem>,
+}

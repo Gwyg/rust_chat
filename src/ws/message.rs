@@ -166,19 +166,6 @@ pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage
         .is_ok()
 }
 
-pub async fn parse_join_message(socket: &mut WebSocket) -> Option<ClientMessage> {
-    match socket.recv().await {
-        Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
-            Ok(msg) => Some(msg),
-            Err(_) => {
-                send_error(socket, "消息格式错误").await;
-                None
-            }
-        },
-        _ => None,
-    }
-}
-
 /// 从 group_rooms 查找群聊 channel
 pub async fn find_group_room(
     state: &AppState,
