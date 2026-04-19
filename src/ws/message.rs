@@ -2,111 +2,151 @@ use crate::db;
 use crate::models::{ClientMessage, ServerMessage};
 use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
-use tokio::sync::broadcast;
 use tracing::error;
 
 pub async fn handle_client_message(state: &AppState, text: &str, username: &str, room: &str) {
-    match serde_json::from_str::<ClientMessage>(text) {
-        Ok(m) => match m.msg_type.as_str() {
-            "message" => {
-                let tx = {
-                    let rooms = state.rooms.read().await;
-                    rooms.get(room).cloned()
-                };
+    let m = match serde_json::from_str::<ClientMessage>(text) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
 
-                if let Some(tx) = tx {
-                    if let Err(e) = tx.send(ClientMessage {
-                        msg_type: "message".into(),
-                        username: username.into(),
-                        room: room.into(),
-                        content: m.content.clone(),
-                        file_id: None,   // ← 补
-                        filename: None,  // ← 补
-                        mime_type: None, // ← 补
-                    }) {
-                        error!("广播消息失败: {}", e);
-                    } else if let Err(e) =
-                        db::save_message(&state.db, username, room, &m.content).await
-                    {
-                        error!("保存消息失败: {}", e);
-                    }
+    match m.msg_type.as_str() {
+        // ── 群聊文字消息 ────────────────────────────
+        "message" => {
+            let tx = {
+                let rooms = state.group_rooms.read().await;
+                rooms.get(room).cloned()
+            };
+
+            if let Some(tx) = tx {
+                if let Err(e) = tx.send(ClientMessage {
+                    msg_type: "message".into(),
+                    username: username.into(),
+                    room: room.into(),
+                    content: m.content.clone(),
+                    ..Default::default()
+                }) {
+                    error!("广播群聊消息失败: {}", e);
+                } else if let Err(e) = db::save_message(&state.db, username, room, &m.content).await {
+                    error!("保存群聊消息失败: {}", e);
                 }
-                // 在广播+保存群聊消息成功后，追加离线消息逻辑：
-                // 对群内不在线的成员推送离线消息
-                let members = {
-                    let online = state.online.read().await;
-                    online.get(room).cloned().unwrap_or_default()
-                };
-                if let Ok(all_users) = db::get_group_members(&state.db, room).await {
-                    for member in &all_users {
-                        if member.username != username && !members.contains(&member.username) {
-                            let _ = db::save_offline_message(
-                                &state.db,
-                                username,
-                                &member.username,
-                                &m.content,
-                                "group", // msg_type
-                                room,    // source_id = group_id
-                            )
-                            .await;
-                        }
+            }
+
+            // 对不在线的群成员存离线消息
+            let online_members = {
+                state.online.read().await.get(room).cloned().unwrap_or_default()
+            };
+            if let Ok(all_members) = db::get_group_members(&state.db, room).await {
+                for member in &all_members {
+                    if member.username != username && !online_members.contains(&member.username) {
+                        let _ = db::save_offline_message(
+                            &state.db, username, &member.username,
+                            &m.content, "group", room,
+                        ).await;
                     }
                 }
             }
-            "private" => {
-                let target = m.room.clone();
-                // conv_id 用于数据库存储，不用于 broadcast
-                let conv_id = format!("{}_{}", username.min(&target), username.max(&target));
+        }
 
-                // 发送方往接收方的个人频道发消息（与 run_private_loop 中的订阅对齐）
-                let private_channel = format!("__private_{}", target);
-                let tx = {
-                    let mut rooms = state.rooms.write().await;
-                    rooms
-                        .entry(private_channel.clone())
-                        .or_insert_with(|| broadcast::channel(64).0)
-                        .clone()
-                };
+        // ── 私聊文字消息 ────────────────────────────
+        "private" => {
+            let target = m.room.clone();
+            let conv_id = format!("{}_{}", username.min(&target), username.max(&target));
 
+            // 查 private_rooms 判断对方是否在线
+            let tx = state.private_rooms.read().await.get(&target).cloned();
+
+            if let Some(tx) = tx {
+                // 对方在线，直接通过 mpsc 推送
                 let _ = tx.send(ClientMessage {
                     msg_type: "private".into(),
                     username: username.into(),
                     room: conv_id.clone(),
                     content: m.content.clone(),
-                    file_id: None,   // ← 补
-                    filename: None,  // ← 补
-                    mime_type: None, // ← 补
-                });
-
-                // ✅ 保存到私聊消息表（不是离线消息）
-                if let Err(e) =
-                    db::save_private_message(&state.db, username, &conv_id, &m.content).await
-                {
-                    error!("保存私聊消息失败: {}", e);
+                    ..Default::default()
+                }).await;
+            } else {
+                // 对方不在线，存离线消息
+                if let Err(e) = db::save_offline_message(
+                    &state.db, username, &target,
+                    &m.content, "private", &conv_id,
+                ).await {
+                    error!("保存离线消息失败: {}", e);
                 }
+            }
 
-                // ✅ 只有目标不在线才额外保存离线消息
-                let target_online = is_user_online(state, &target).await;
-                if !target_online {
-                    if let Err(e) = db::save_offline_message(
-                        &state.db, username, &target, &m.content, "private", &conv_id,
-                    )
-                    .await
-                    {
-                        error!("保存离线消息失败: {}", e);
+            // 无论对方在不在线，都保存到 private_messages 表
+            if let Err(e) = db::save_private_message(&state.db, username, &conv_id, &m.content).await {
+                error!("保存私聊消息失败: {}", e);
+            }
+        }
+
+        // ── 文件消息（群聊 or 私聊）────────────────────────────
+        "file" => {
+            let file_id = match &m.file_id {
+                Some(id) => id.clone(),
+                None => return,
+            };
+            let file_name = m.filename.clone().unwrap_or_default();
+            let mime_type = m.mime_type.clone().unwrap_or_default();
+
+            if room.is_empty() {
+                // 私聊文件
+                let target = m.room.clone();
+                let conv_id = format!("{}_{}", username.min(&target), username.max(&target));
+
+                let tx = state.private_rooms.read().await.get(&target).cloned();
+                if let Some(tx) = tx {
+                    let _ = tx.send(ClientMessage {
+                        msg_type: "file".into(),
+                        username: username.into(),
+                        room: conv_id.clone(),
+                        content: file_name.clone(),
+                        file_id: Some(file_id.clone()),
+                        filename: Some(file_name.clone()),
+                        mime_type: Some(mime_type),
+                    }).await;
+                } else {
+                    let _ = db::save_offline_message(
+                        &state.db, username, &target,
+                        &format!("[文件] {}", file_name),
+                        "private", &conv_id,
+                    ).await;
+                }
+            } else {
+                // 群聊文件
+                let tx = state.group_rooms.read().await.get(room).cloned();
+                if let Some(tx) = tx {
+                    let _ = tx.send(ClientMessage {
+                        msg_type: "file".into(),
+                        username: username.into(),
+                        room: room.into(),
+                        content: file_name.clone(),
+                        file_id: Some(file_id.clone()),
+                        filename: Some(file_name.clone()),
+                        mime_type: Some(mime_type),
+                    });
+
+                    let online_members = {
+                        state.online.read().await.get(room).cloned().unwrap_or_default()
+                    };
+                    if let Ok(all_members) = db::get_group_members(&state.db, room).await {
+                        for member in &all_members {
+                            if member.username != username && !online_members.contains(&member.username) {
+                                let _ = db::save_offline_message(
+                                    &state.db, username, &member.username,
+                                    &format!("[文件] {}", file_name),
+                                    "group", room,
+                                ).await;
+                            }
+                        }
                     }
                 }
             }
-            _ => {}
-        },
-        Err(_) => {}
-    }
-}
+        }
 
-/// 检查用户是否在任意房间在线
-async fn is_user_online(state: &AppState, username: &str) -> bool {
-    let online = state.online.read().await;
-    online.values().any(|members| members.contains(username))
+        _ => {}
+    }
 }
 
 pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage) -> bool {
@@ -114,9 +154,9 @@ pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage
         msg_type: client_msg.msg_type,
         username: client_msg.username,
         content: client_msg.content,
-        file_id: None,   // ← 补
-        filename: None,  // ← 补
-        mime_type: None, // ← 补
+        file_id: client_msg.file_id,
+        filename: client_msg.filename,
+        mime_type: client_msg.mime_type,
     };
     socket
         .send(Message::Text(
@@ -139,12 +179,13 @@ pub async fn parse_join_message(socket: &mut WebSocket) -> Option<ClientMessage>
     }
 }
 
-pub async fn find_room(
+/// 从 group_rooms 查找群聊 channel
+pub async fn find_group_room(
     state: &AppState,
     room: &str,
     socket: &mut WebSocket,
 ) -> Option<tokio::sync::broadcast::Sender<ClientMessage>> {
-    let rooms = state.rooms.read().await;
+    let rooms = state.group_rooms.read().await;
     match rooms.get(room) {
         Some(tx) => Some(tx.clone()),
         None => {
@@ -161,9 +202,7 @@ pub async fn send_error(socket: &mut WebSocket, content: &str) {
                 msg_type: "error".into(),
                 username: "".into(),
                 content: content.into(),
-                file_id: None,   // ← 补
-                filename: None,  // ← 补
-                mime_type: None, // ← 补
+                ..Default::default()
             })
             .expect("serialize failed"),
         ))

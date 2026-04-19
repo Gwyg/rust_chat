@@ -56,7 +56,7 @@ pub async fn create_group(
     match db::create_group(&state.db, &me, body.name.trim()).await {
         Ok(group_id) => {
             // 同步在 AppState.rooms 中注册该群的广播频道
-            let mut rooms = state.rooms.write().await;
+            let mut rooms = state.group_rooms.write().await;
             let (tx, _) = tokio::sync::broadcast::channel(64);
             rooms.insert(group_id.clone(), tx);
             drop(rooms);
@@ -191,7 +191,7 @@ pub async fn dissolve_group(
     match db::dissolve_group(&state.db, &group_id, &me).await {
         Ok(_) => {
             // 从 AppState.rooms 中移除该群的广播频道
-            state.rooms.write().await.remove(&group_id);
+            state.group_rooms.write().await.remove(&group_id);
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         Err(e) => (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
