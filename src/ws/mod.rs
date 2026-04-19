@@ -4,9 +4,7 @@ use crate::auth::token::verify_token;
 use crate::db;
 use crate::models::{ClientMessage, ServerMessage};
 use crate::state::AppState;
-use crate::ws::message::{
-    find_room, forward_to_client, handle_client_message, parse_join_message,
-};
+use crate::ws::message::{find_room, forward_to_client, handle_client_message, parse_join_message};
 use axum::extract::ws::{Message, WebSocket};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -40,29 +38,26 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: Strin
 }
 
 /// 群聊 loop：加入房间、推送历史、广播收发
-async fn run_group_loop(
-    socket: &mut WebSocket,
-    state: &AppState,
-    username: &str,
-    room: &str,
-) {
+async fn run_group_loop(socket: &mut WebSocket, state: &AppState, username: &str, room: &str) {
     let tx = match find_room(state, room, socket).await {
         Some(tx) => tx,
         None => return, // find_room 内部已发送错误消息
     };
 
     info!("用户 {} 加入群组 {}", username, room);
-    state.online.write().await
+    state
+        .online
+        .write()
+        .await
         .entry(room.to_string())
         .or_default()
         .insert(username.to_string());
 
-    // 推送离线消息
     if let Ok(offline) = db::get_offline_messages(&state.db, &username).await {
         if !offline.is_empty() {
             for msg in &offline {
                 let server_msg = ServerMessage {
-                    msg_type: "private".into(),
+                    msg_type: msg.msg_type.clone(),
                     username: msg.username.clone(),
                     content: format!("[离线消息] {}", msg.content),
                 };
@@ -125,11 +120,7 @@ async fn run_group_loop(
 }
 
 /// 私聊 loop：不订阅广播，只处理收发消息（private channel 在 handle_client_message 内动态创建）
-async fn run_private_loop(
-    socket: &mut WebSocket,
-    state: &AppState,
-    username: &str,
-) {
+async fn run_private_loop(socket: &mut WebSocket, state: &AppState, username: &str) {
     info!("用户 {} 进入私聊模式", username);
 
     // 订阅一个以自己用户名命名的个人 channel，用于接收别人发来的私聊
@@ -185,7 +176,11 @@ async fn run_private_loop(
     }
 
     // 退出时清理个人 channel
-    state.rooms.write().await.remove(&format!("__private_{}", username));
+    state
+        .rooms
+        .write()
+        .await
+        .remove(&format!("__private_{}", username));
     info!("用户 {} 离开私聊模式", username);
 }
 

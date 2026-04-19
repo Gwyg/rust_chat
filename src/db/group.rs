@@ -257,3 +257,64 @@ pub async fn dissolve_group(
 
     Ok(())
 }
+
+// ============================================================
+// 群聊未读游标相关
+// ============================================================
+
+/// 更新用户在某个群内的已读游标
+///
+/// 使用 INSERT OR REPLACE 保证幂等：如果记录已存在则更新，不存在则插入
+pub async fn update_group_read_cursor(
+    pool: &DbPool,
+    username: &str,
+    group_id: &str,
+    message_id: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO group_read_cursor (username, group_id, last_read_id, updated_at)
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(username, group_id)
+         DO UPDATE SET last_read_id = excluded.last_read_id, updated_at = CURRENT_TIMESTAMP"
+    )
+    .bind(username)
+    .bind(group_id)
+    .bind(message_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 查询用户在某个群的未读消息数
+///
+/// 计算逻辑：group_messages 中 id > last_read_id 的消息数量
+/// 如果用户没有游标记录（从未标记已读），返回 0
+pub async fn get_group_unread_count(
+    pool: &DbPool,
+    username: &str,
+    group_id: &str,
+) -> anyhow::Result<i64> {
+    let cursor: Option<i64> = sqlx::query_scalar(
+        "SELECT last_read_id FROM group_read_cursor
+         WHERE username = ? AND group_id = ?"
+    )
+    .bind(username)
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match cursor {
+        Some(last_read_id) => {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM group_messages
+                 WHERE group_id = ? AND id > ?"
+            )
+            .bind(group_id)
+            .bind(last_read_id)
+            .fetch_one(pool)
+            .await?;
+            Ok(count)
+        }
+        None => Ok(0), // 没有游标记录，说明从未标记已读，返回 0
+    }
+}

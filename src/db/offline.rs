@@ -7,24 +7,28 @@ pub async fn save_offline_message(
     sender: &str,
     recipient: &str,
     content: &str,
+    msg_type: &str,
+    source_id: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO offline_messages (sender, recipient, content) VALUES (?, ?, ?)"
+        "INSERT INTO offline_messages (recipient, sender, content, type, source_id) VALUES (?, ?, ?, ?, ?)"
     )
-    .bind(sender)
     .bind(recipient)
+    .bind(sender)
     .bind(content)
+    .bind(msg_type)
+    .bind(source_id)
     .execute(pool)
     .await?;
     Ok(())
 }
-
+/// 获取用户的所有离线消息
 pub async fn get_offline_messages(
     pool: &DbPool,
     username: &str,
 ) -> anyhow::Result<Vec<ClientMessage>> {
     let rows = sqlx::query(
-        "SELECT id, sender, content FROM offline_messages
+        "SELECT id, sender, content, type, source_id FROM offline_messages
          WHERE recipient = ? ORDER BY id ASC"
     )
     .bind(username)
@@ -37,10 +41,12 @@ pub async fn get_offline_messages(
             let _: i64 = row.try_get("id").unwrap_or(0);
             let sender: String = row.try_get("sender").unwrap_or_default();
             let content: String = row.try_get("content").unwrap_or_default();
+            let msg_type: String = row.try_get("type").unwrap_or_else(|_| "private".into());
+            let source_id: String = row.try_get("source_id").unwrap_or_default();
             ClientMessage {
-                msg_type: "private".into(),
+                msg_type,
                 username: sender,
-                room: "".into(),
+                room: source_id,
                 content,
             }
         })
@@ -49,6 +55,7 @@ pub async fn get_offline_messages(
     Ok(messages)
 }
 
+/// 清除用户的所有离线消息
 pub async fn clear_offline_messages(
     pool: &DbPool,
     username: &str,

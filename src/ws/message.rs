@@ -13,6 +13,7 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                     let rooms = state.rooms.read().await;
                     rooms.get(room).cloned()
                 };
+
                 if let Some(tx) = tx {
                     if let Err(e) = tx.send(ClientMessage {
                         msg_type: "message".into(),
@@ -27,33 +28,42 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                         error!("保存消息失败: {}", e);
                     }
                 }
+                // 在广播+保存群聊消息成功后，追加离线消息逻辑：
+                // 对群内不在线的成员推送离线消息
+                let members = {
+                    let online = state.online.read().await;
+                    online.get(room).cloned().unwrap_or_default()
+                };
+                if let Ok(all_users) = db::get_group_members(&state.db, room).await {
+                    for member in &all_users {
+                        if member.username != username && !members.contains(&member.username) {
+                            let _ = db::save_offline_message(
+                                &state.db,
+                                username,
+                                &member.username,
+                                &m.content,
+                                "group", // msg_type
+                                room,    // source_id = group_id
+                            )
+                            .await;
+                        }
+                    }
+                }
             }
             "private" => {
                 let target = m.room.clone();
+                // conv_id 用于数据库存储，不用于 broadcast
                 let conv_id = format!("{}_{}", username.min(&target), username.max(&target));
 
+                // 发送方往接收方的个人频道发消息（与 run_private_loop 中的订阅对齐）
+                let private_channel = format!("__private_{}", target);
                 let tx = {
-                    let rooms = state.rooms.read().await;
-                    rooms.get(&conv_id).cloned()
+                    let mut rooms = state.rooms.write().await;
+                    rooms
+                        .entry(private_channel.clone())
+                        .or_insert_with(|| broadcast::channel(64).0)
+                        .clone()
                 };
-
-                let tx = if let Some(tx) = tx {
-                    tx
-                } else {
-                    let (tx, _) = broadcast::channel(64);
-                    {
-                        let mut rooms = state.rooms.write().await;
-                        rooms.insert(conv_id.clone(), tx.clone());
-                    }
-                    let mut online = state.online.write().await;
-                    online.entry(conv_id.clone()).or_default().insert(username.into());
-                    tx
-                };
-
-                {
-                    let mut online = state.online.write().await;
-                    online.entry(conv_id.clone()).or_default().insert(target.clone());
-                }
 
                 let _ = tx.send(ClientMessage {
                     msg_type: "private".into(),
@@ -63,7 +73,12 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                 });
 
                 if let Err(e) =
-                    db::save_private_message(&state.db, username, &conv_id, &m.content).await
+                    // 改为：
+                    db::save_offline_message(
+                        &state.db, username, &target, &m.content, "private", // msg_type
+                        &conv_id,  // source_id = conv_id
+                    )
+                    .await
                 {
                     error!("保存私聊消息失败: {}", e);
                 }
@@ -71,9 +86,14 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                 // 如果目标用户不在线，保存为离线消息
                 let target_online = is_user_online(state, &target).await;
                 if !target_online {
-                    if let Err(e) = db::save_offline_message(
-                        &state.db, username, &target, &m.content
-                    ).await {
+                    if let Err(e) =
+                        // 改为：
+                        db::save_offline_message(
+                            &state.db, username, &target, &m.content, "private", // msg_type
+                            &conv_id,  // source_id = conv_id
+                        )
+                        .await
+                    {
                         error!("保存离线消息失败: {}", e);
                     }
                 }

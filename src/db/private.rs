@@ -1,6 +1,6 @@
-use sqlx::Row;
 use crate::db::{DbPool, PaginatedMessages};
 use crate::models::{ClientMessage, ConversationItem};
+use sqlx::Row;
 
 pub async fn save_private_message(
     pool: &DbPool,
@@ -8,15 +8,12 @@ pub async fn save_private_message(
     conv_id: &str,
     content: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        "INSERT INTO messages (username, room, content, conversation_id) VALUES (?, ?, ?, ?)"
-    )
-    .bind(username)
-    .bind(conv_id)
-    .bind(content)
-    .bind(conv_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO private_messages (conv_id, sender, content) VALUES (?, ?, ?)")
+        .bind(conv_id)
+        .bind(username)
+        .bind(content)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -25,17 +22,13 @@ pub async fn get_user_conversations(
     username: &str,
 ) -> anyhow::Result<Vec<ConversationItem>> {
     let rows = sqlx::query(
-        "SELECT conversation_id as conv_id,
-                MAX(content) as last_content,
-                MAX(id) as last_id
-         FROM messages
-         WHERE conversation_id IS NOT NULL
-           AND conversation_id IN (
-               SELECT conv_id FROM conversations WHERE type = 'private'
-               AND conv_id LIKE ?
-           )
-         GROUP BY conversation_id
-         ORDER BY last_id DESC"
+        "SELECT c.conv_id,
+                pm.content as last_content,
+                pm.id as last_id
+            FROM conversations c
+            JOIN private_messages pm ON c.conv_id = pm.conv_id
+            WHERE c.conv_id LIKE ? 
+            AND pm.id = (SELECT MAX(id) FROM private_messages WHERE conv_id = c.conv_id)",
     )
     .bind(&format!("%{}%", username))
     .fetch_all(pool)
@@ -60,11 +53,9 @@ pub async fn get_user_conversations(
     }
 
     let group_rows = sqlx::query(
-        "SELECT room as conv_id, MAX(content) as last_content
-         FROM messages
-         WHERE conversation_id IS NULL
-         GROUP BY room
-         ORDER BY MAX(id) DESC"
+        "SELECT group_id as conv_id, content as last_content, id as last_id
+            FROM group_messages
+            WHERE id = (SELECT MAX(id) FROM group_messages WHERE group_id = gm.group_id)",
     )
     .fetch_all(pool)
     .await?;
@@ -91,8 +82,8 @@ pub async fn get_private_history_paginated(
     let actual_limit = limit + 1;
     let rows = if let Some(before) = before_id {
         sqlx::query(
-            "SELECT id, username, content FROM messages
-             WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, sender, content FROM private_messages 
+            WHERE conv_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
         )
         .bind(conv_id)
         .bind(before)
@@ -101,8 +92,8 @@ pub async fn get_private_history_paginated(
         .await?
     } else {
         sqlx::query(
-            "SELECT id, username, content FROM messages
-             WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, sender, content FROM private_messages 
+            WHERE conv_id = ? ORDER BY id DESC LIMIT ?",
         )
         .bind(conv_id)
         .bind(actual_limit)
@@ -111,14 +102,18 @@ pub async fn get_private_history_paginated(
     };
 
     let has_more = (rows.len() as i64) > limit;
-    let page_rows = if has_more { &rows[..(limit as usize)] } else { &rows[..] };
+    let page_rows = if has_more {
+        &rows[..(limit as usize)]
+    } else {
+        &rows[..]
+    };
 
     let mut messages: Vec<ClientMessage> = page_rows
         .iter()
         .map(|row| {
             let id: i64 = row.try_get("id").unwrap_or(0);
             ClientMessage {
-                username: row.try_get("username").unwrap_or_default(),
+                username: row.try_get("sender").unwrap_or_default(),
                 room: "".into(),
                 content: row.try_get("content").unwrap_or_default(),
                 msg_type: format!("private:{}", id),
@@ -130,11 +125,21 @@ pub async fn get_private_history_paginated(
     let min_id = if messages.is_empty() {
         None
     } else {
-        Some(page_rows.iter().map(|r| {
-            let id: i64 = r.try_get("id").unwrap_or(0);
-            id
-        }).min().unwrap_or(0))
+        Some(
+            page_rows
+                .iter()
+                .map(|r| {
+                    let id: i64 = r.try_get("id").unwrap_or(0);
+                    id
+                })
+                .min()
+                .unwrap_or(0),
+        )
     };
 
-    Ok(PaginatedMessages { messages, min_id, has_more })
+    Ok(PaginatedMessages {
+        messages,
+        min_id,
+        has_more,
+    })
 }
