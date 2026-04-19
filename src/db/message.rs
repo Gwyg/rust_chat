@@ -69,6 +69,7 @@ pub async fn get_room_history_paginated(
                 room: row.try_get("room").unwrap_or_default(),
                 content: row.try_get("content").unwrap_or_default(),
                 msg_type: format!("message:{}", id), // 把 id 编码到 msg_type 里传回前端
+                ..Default::default()
             }
         })
         .collect();

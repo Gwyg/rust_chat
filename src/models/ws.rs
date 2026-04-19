@@ -1,17 +1,30 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Default)]
 pub struct ClientMessage {
     pub msg_type: String,
     pub username: String,
     pub room: String,
     pub content: String,
+    // 文件传输扩展字段
+    #[serde(default)]
+    pub file_id: Option<String>,
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Default)]
 pub struct ServerMessage {
     #[serde(rename = "type")]
     pub msg_type: String,
     pub username: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
 }

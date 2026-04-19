@@ -1,11 +1,13 @@
 mod auth;
 mod chat;
+mod file;
 mod friends;
 mod group;
 mod ws;
 
 pub use auth::*;
 pub use chat::*;
+pub use file::*;
 pub use friends::*;
 pub use group::*;
 pub use ws::*;
@@ -40,7 +42,10 @@ pub fn app(state: AppState) -> Router {
         .route("/api/friends/accept", post(accept_friend))
         .route("/api/friends/:target", delete(delete_friend))
         // 群组相关（新增）
-        .route("/api/rooms/{room}/history", get(chat::room_history_paginated))
+        .route(
+            "/api/rooms/{room}/history",
+            get(chat::room_history_paginated),
+        )
         .route("/api/groups", get(list_groups).post(create_group))
         .route("/api/groups/:group_id", delete(dissolve_group))
         .route("/api/groups/:group_id/members", get(list_group_members))
@@ -48,6 +53,8 @@ pub fn app(state: AppState) -> Router {
         .route("/api/groups/members/remove", post(remove_member))
         .route("/api/groups/notice", put(update_notice))
         .route("/api/groups/avatar", put(update_avatar))
+        .route("/api/upload", post(upload_file))
+        .route("/api/download/{file_id}", get(download_file))
         .route_layer(from_fn(auth_middleware))
         .with_state(state.clone());
 

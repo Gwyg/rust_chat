@@ -118,3 +118,14 @@ CREATE TABLE IF NOT EXISTS group_read_cursor (
     updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP,           -- 游标更新时间
     PRIMARY KEY (username, group_id)                           -- 每个用户在每个群内唯一一条
 );
+
+-- 文件表：存储上传文件的元数据
+CREATE TABLE IF NOT EXISTS files (
+    id           TEXT     PRIMARY KEY,                     -- UUID
+    filename     TEXT     NOT NULL,                        -- 原始文件名
+    mime_type    TEXT     NOT NULL DEFAULT 'application/octet-stream',
+    file_size    INTEGER  NOT NULL DEFAULT 0,              -- 字节数
+    storage_path TEXT     NOT NULL,                        -- 磁盘实际路径
+    uploader     TEXT     NOT NULL,                        -- 上传人用户名
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);

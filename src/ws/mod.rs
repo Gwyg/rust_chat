@@ -60,6 +60,9 @@ async fn run_group_loop(socket: &mut WebSocket, state: &AppState, username: &str
                     msg_type: msg.msg_type.clone(),
                     username: msg.username.clone(),
                     content: format!("[离线消息] {}", msg.content),
+                    file_id: None,      // ← 补
+    filename: None,     // ← 补
+    mime_type: None,    // ← 补
                 };
                 if socket
                     .send(Message::Text(serde_json::to_string(&server_msg).unwrap()))
@@ -206,5 +209,8 @@ async fn broadcast_system(tx: &broadcast::Sender<ClientMessage>, room: &str, con
         room: room.into(),
         content: content.into(),
         msg_type: "message".into(),
+        file_id: None,      // ← 补
+    filename: None,     // ← 补
+    mime_type: None,    // ← 补
     });
 }

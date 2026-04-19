@@ -20,6 +20,9 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                         username: username.into(),
                         room: room.into(),
                         content: m.content.clone(),
+                        file_id: None,   // ← 补
+                        filename: None,  // ← 补
+                        mime_type: None, // ← 补
                     }) {
                         error!("广播消息失败: {}", e);
                     } else if let Err(e) =
@@ -70,6 +73,9 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                     username: username.into(),
                     room: conv_id.clone(),
                     content: m.content.clone(),
+                    file_id: None,   // ← 补
+                    filename: None,  // ← 补
+                    mime_type: None, // ← 补
                 });
 
                 // ✅ 保存到私聊消息表（不是离线消息）
@@ -108,6 +114,9 @@ pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage
         msg_type: client_msg.msg_type,
         username: client_msg.username,
         content: client_msg.content,
+        file_id: None,   // ← 补
+        filename: None,  // ← 补
+        mime_type: None, // ← 补
     };
     socket
         .send(Message::Text(
@@ -152,6 +161,9 @@ pub async fn send_error(socket: &mut WebSocket, content: &str) {
                 msg_type: "error".into(),
                 username: "".into(),
                 content: content.into(),
+                file_id: None,   // ← 补
+                filename: None,  // ← 补
+                mime_type: None, // ← 补
             })
             .expect("serialize failed"),
         ))

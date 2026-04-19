@@ -48,6 +48,7 @@ pub async fn get_offline_messages(
                 username: sender,
                 room: source_id,
                 content,
+                ..Default::default()
             }
         })
         .collect();

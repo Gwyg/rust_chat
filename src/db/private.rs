@@ -117,6 +117,7 @@ pub async fn get_private_history_paginated(
                 room: "".into(),
                 content: row.try_get("content").unwrap_or_default(),
                 msg_type: format!("private:{}", id),
+                ..Default::default()
             }
         })
         .collect();
