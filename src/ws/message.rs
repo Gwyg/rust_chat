@@ -72,27 +72,20 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                     content: m.content.clone(),
                 });
 
+                // ✅ 保存到私聊消息表（不是离线消息）
                 if let Err(e) =
-                    // 改为：
-                    db::save_offline_message(
-                        &state.db, username, &target, &m.content, "private", // msg_type
-                        &conv_id,  // source_id = conv_id
-                    )
-                    .await
+                    db::save_private_message(&state.db, username, &conv_id, &m.content).await
                 {
                     error!("保存私聊消息失败: {}", e);
                 }
 
-                // 如果目标用户不在线，保存为离线消息
+                // ✅ 只有目标不在线才额外保存离线消息
                 let target_online = is_user_online(state, &target).await;
                 if !target_online {
-                    if let Err(e) =
-                        // 改为：
-                        db::save_offline_message(
-                            &state.db, username, &target, &m.content, "private", // msg_type
-                            &conv_id,  // source_id = conv_id
-                        )
-                        .await
+                    if let Err(e) = db::save_offline_message(
+                        &state.db, username, &target, &m.content, "private", &conv_id,
+                    )
+                    .await
                     {
                         error!("保存离线消息失败: {}", e);
                     }
