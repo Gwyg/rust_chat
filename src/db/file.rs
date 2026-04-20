@@ -2,13 +2,10 @@ use crate::db::DbPool;
 
 #[derive(sqlx::FromRow)]
 pub struct FileRecord {
-    pub id: String,
     pub filename: String,
     pub mime_type: String,
     pub file_size: i64,
     pub storage_path: String,
-    pub uploader: String,
-    pub created_at: String,
 }
 
 /// 保存文件元数据到数据库

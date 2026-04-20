@@ -68,3 +68,10 @@ pub struct GroupMemberItem {
     pub role: String,           // 角色：owner / admin / member
     pub joined_at: String,      // 加入时间
 }
+
+/// 消息撤回请求体
+#[derive(Deserialize)]
+pub struct RecallRequest {
+    pub msg_type: String,  // "group" | "private"
+    pub room: String,      // group_id 或 conv_id
+}

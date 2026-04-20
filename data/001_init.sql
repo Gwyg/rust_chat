@@ -129,3 +129,7 @@ CREATE TABLE IF NOT EXISTS files (
     uploader     TEXT     NOT NULL,                        -- 上传人用户名
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 消息撤回支持
+ALTER TABLE group_messages   ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE private_messages ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0;

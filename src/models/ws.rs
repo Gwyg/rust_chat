@@ -13,6 +13,10 @@ pub struct ClientMessage {
     pub filename: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    #[serde(default)]
+    pub recalled: bool,
+    #[serde(default)]
+    pub message_id: Option<i64>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -27,6 +31,10 @@ pub struct ServerMessage {
     pub filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recalled: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

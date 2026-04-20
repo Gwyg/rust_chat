@@ -105,6 +105,7 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                         file_id: Some(file_id.clone()),
                         filename: Some(file_name.clone()),
                         mime_type: Some(mime_type),
+                        ..Default::default()
                     }).await;
                 } else {
                     let _ = db::save_offline_message(
@@ -125,6 +126,7 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                         file_id: Some(file_id.clone()),
                         filename: Some(file_name.clone()),
                         mime_type: Some(mime_type),
+                        ..Default::default()
                     });
 
                     let online_members = {
@@ -157,6 +159,8 @@ pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage
         file_id: client_msg.file_id,
         filename: client_msg.filename,
         mime_type: client_msg.mime_type,
+        message_id: client_msg.message_id,
+        recalled: if client_msg.recalled { Some(true) } else { None },
     };
     socket
         .send(Message::Text(

@@ -225,6 +225,40 @@
             background: #fff0f0; border: 1px solid #fdd; padding: 5px 12px; border-radius: 8px;
         }
 
+        /* ── 撤回消息样式 ── */
+        .bubble.recalled {
+            background: transparent !important;
+            color: #bbb !important;
+            font-style: italic;
+            font-size: 13px;
+            padding: 6px 13px;
+            box-shadow: none !important;
+        }
+        .msg-row.self .bubble.recalled { background: transparent !important; }
+        .bubble.can-recall { cursor: context-menu; }
+        .recall-timer {
+            font-size: 10px; color: #ccc;
+            margin-top: 2px; padding: 0 4px; display: inline-block;
+        }
+
+        /* ── 右键菜单 ── */
+        .context-menu {
+            position: fixed; z-index: 3000;
+            background: #fff; border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,.15);
+            padding: 6px 0; min-width: 120px;
+            opacity: 0; pointer-events: none;
+            transition: opacity .15s;
+        }
+        .context-menu.show { opacity: 1; pointer-events: all; }
+        .context-menu-item {
+            padding: 8px 16px; font-size: 13px; color: #333;
+            cursor: pointer; display: flex; align-items: center; gap: 8px;
+        }
+        .context-menu-item:hover { background: #f3f1ff; }
+        .context-menu-item.danger { color: #e74c3c; }
+        .context-menu-item.danger:hover { background: #fff0f0; }
+
         .input-area {
             padding: 12px 16px; border-top: 1px solid #ececec;
             display: flex; gap: 10px; background: #fff; flex-shrink: 0;
@@ -472,6 +506,11 @@
         <img id="img-preview-src" src="" />
     </div>
 
+    <!-- 消息右键菜单 -->
+    <div class="context-menu" id="context-menu">
+        <div class="context-menu-item danger" id="ctx-recall" onclick="doRecall()">↩ 撤回</div>
+    </div>
+
     <!-- 群管理面板 -->
     <div class="group-panel" id="group-panel">
         <div class="panel-header">
@@ -544,6 +583,11 @@
     </div>
 </div>
 
+<!-- 消息右键菜单 -->
+<div class="context-menu" id="context-menu">
+    <div class="context-menu-item danger" id="ctx-recall" onclick="doRecall()">↩ 撤回</div>
+</div>
+
 <script>
 // ── 状态 ──────────────────────────────────────────────
 let ws = null;
@@ -560,7 +604,8 @@ let myGroups = [];           // 用户自建/加入的群组列表
 let currentGroupDetail = null; // 当前打开群的详情（含成员）
 let searchQuery = '';
 
-
+let contextTarget = null;     // 右键菜单目标 { messageId, bubble }
+let recallTimers = {};        // 撤回倒计时 { messageId: timerId }
 
 const COLORS = ['#f4693b','#e91e8c','#9c27b0','#3f51b5','#2196f3','#00bcd4','#009688','#4caf50','#ff9800','#795548'];
 function avatarColor(n) {
@@ -648,7 +693,7 @@ function connectWS() {
 function handleIncoming(msg) {
     const t = msg.type;
     if (t === 'error') { appendErrMsg(msg.content); return; }
-    if (t === 'history') { appendChatMsg(msg.username, msg.content); return; }
+    if (t === 'history') { appendChatMsg(msg.username, msg.content, msg.recalled || false, msg.message_id); return; }
     if (t === 'file') {
         const isImage = msg.mime_type && msg.mime_type.startsWith('image/');
         if (isImage) {
@@ -660,12 +705,17 @@ function handleIncoming(msg) {
     }
     if (t === 'private') {
         if (currentSession?.type === 'private' && currentSession.id === msg.username) {
-            appendChatMsg(msg.username, msg.content);
+            appendChatMsg(msg.username, msg.content, false, msg.message_id);
         }
         return;
     }
+    // ── 撤回事件 ──
+    if (t === 'recall') {
+        handleRecallEvent(msg.message_id, msg.username);
+        return;
+    }
     if (msg.username === '系统') { appendSysMsg(msg.content); updateOnlineCount(); return; }
-    appendChatMsg(msg.username, msg.content);
+    appendChatMsg(msg.username, msg.content, false, msg.message_id);
 }
 
 // ── Tab 切换 ────────────────────────────────────────────
@@ -865,6 +915,16 @@ async function openMyGroup(g, openPanel = false) {
     // 加载群详情
     await refreshGroupPanel(g.group_id);
     if (openPanel && !panelOpen) toggleGroupPanel();
+
+    // 加载群历史（含撤回标记）
+    try {
+        const r = await fetch(`/api/rooms/${encodeURIComponent(g.group_id)}/history?limit=50`);
+        if (r.ok) {
+            const data = await r.json();
+            const msgs = data.messages || [];
+            msgs.forEach(m => appendChatMsg(m.username, m.content, m.recalled || false, m.message_id));
+        }
+    } catch {}
 }
 
 async function openPrivate(username) {
@@ -881,7 +941,11 @@ async function openPrivate(username) {
     renderSidebar();
     try {
         const r = await fetch(`/api/private/${encodeURIComponent(username)}/history?username=${encodeURIComponent(myUsername)}`);
-        if (r.ok) { const msgs = await r.json(); msgs.forEach(m => appendChatMsg(m.username, m.content)); }
+        if (r.ok) {
+            const data = await r.json();
+            const msgs = data.messages || [];
+            msgs.forEach(m => appendChatMsg(m.username, m.content, m.recalled || false, m.message_id));
+        }
     } catch {}
 }
 
@@ -1207,22 +1271,46 @@ document.querySelectorAll('.modal-overlay').forEach(el => {
 });
 
 // ── 消息渲染 ────────────────────────────────────────────
-function appendChatMsg(username, content) {
+function appendChatMsg(username, content, recalled = false, messageId = null) {
     const c = document.getElementById('messages'); if (!c) return;
     const isSelf = username === myUsername;
     const row = document.createElement('div');
     row.className = 'msg-row ' + (isSelf ? 'self' : 'other');
+    if (messageId) row.dataset.messageId = messageId;
+
     const av = document.createElement('div');
     av.className = 'msg-avatar';
     av.style.background = avatarColor(username);
     av.textContent = avatarLetter(username);
+
     const body = document.createElement('div');
     body.className = 'msg-body';
-    body.innerHTML = `
-        ${!isSelf ? `<div class="msg-username">${escapeHtml(username)}</div>` : ''}
-        <div class="bubble">${escapeHtml(content)}</div>
-        <div class="msg-time">${fmtTime(new Date())}</div>
-    `;
+
+    if (recalled) {
+        const who = isSelf ? '你' : escapeHtml(username);
+        body.innerHTML = `
+            ${!isSelf ? `<div class="msg-username">${escapeHtml(username)}</div>` : ''}
+            <div class="bubble recalled">"${who}" 撤回了一条消息</div>
+        `;
+    } else {
+        body.innerHTML = `
+            ${!isSelf ? `<div class="msg-username">${escapeHtml(username)}</div>` : ''}
+            <div class="bubble">${escapeHtml(content)}</div>
+            <div class="msg-time">${fmtTime(new Date())}</div>
+        `;
+        // 自己的消息，添加右键菜单 + 2分钟倒计时
+        if (isSelf && messageId) {
+            const bubble = body.querySelector('.bubble');
+            bubble.classList.add('can-recall');
+            bubble.dataset.messageId = messageId;
+            bubble.addEventListener('contextmenu', e => {
+                e.preventDefault();
+                showContextMenu(e, messageId, bubble);
+            });
+            startRecallTimer(messageId, bubble);
+        }
+    }
+
     row.append(av, body);
     c.appendChild(row);
     c.scrollTop = c.scrollHeight;
@@ -1241,6 +1329,120 @@ function clearMessages() { document.getElementById('messages').innerHTML = ''; }
 function showChatMain() {
     document.getElementById('chat-welcome').style.display = 'none';
     document.getElementById('chat-main').style.display = 'flex';
+}
+
+// ── 消息撤回 ────────────────────────────────────────────
+
+/** 显示右键菜单 */
+function showContextMenu(e, messageId, bubble) {
+    hideContextMenu();
+    const menu = document.getElementById('context-menu');
+
+    // 检查是否超过 2 分钟
+    const timerEl = bubble.parentElement.querySelector('.recall-timer');
+    if (timerEl && timerEl.dataset.expired === 'true') return;
+
+    contextTarget = { messageId, bubble };
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.classList.add('show');
+}
+
+function hideContextMenu() {
+    document.getElementById('context-menu').classList.remove('show');
+    contextTarget = null;
+}
+
+// 点击其他地方关闭菜单
+document.addEventListener('click', e => {
+    const menu = document.getElementById('context-menu');
+    if (menu.classList.contains('show') && !menu.contains(e.target)) {
+        hideContextMenu();
+    }
+});
+
+/** 执行撤回 */
+async function doRecall() {
+    if (!contextTarget) return;
+    const { messageId, bubble } = contextTarget;
+    hideContextMenu();
+
+    const msgType = currentSession?.type === 'mygroup' ? 'group' : 'private';
+    const room = currentSession?.type === 'mygroup'
+        ? currentSession.id
+        : `${myUsername < currentSession.id ? myUsername : currentSession.id}_${myUsername > currentSession.id ? myUsername : currentSession.id}`;
+
+    try {
+        const r = await fetch(`/api/messages/${messageId}/recall`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ msg_type: msgType, room }),
+        });
+        if (!r.ok) {
+            const err = await r.json();
+            appendErrMsg(err.error || '撤回失败');
+            return;
+        }
+        markRecalled(messageId, myUsername);
+        if (recallTimers[messageId]) {
+            clearTimeout(recallTimers[messageId]);
+            delete recallTimers[messageId];
+        }
+    } catch (e) {
+        appendErrMsg('撤回失败: ' + e.message);
+    }
+}
+
+/** 处理 WS 撤回事件 */
+function handleRecallEvent(messageId, sender) {
+    if (messageId) {
+        const row = document.querySelector(`.msg-row[data-message-id="${messageId}"]`);
+        if (row) { markRecalled(messageId, sender); return; }
+    }
+    appendSysMsg(`${sender} 撤回了一条消息`);
+}
+
+/** 将消息标记为已撤回 */
+function markRecalled(messageId, sender) {
+    const row = document.querySelector(`.msg-row[data-message-id="${messageId}"]`);
+    if (!row) return;
+    const bubble = row.querySelector('.bubble');
+    if (!bubble) return;
+
+    const who = sender === myUsername ? '你' : sender;
+    bubble.className = 'bubble recalled';
+    bubble.textContent = `"${who}" 撤回了一条消息`;
+
+    const timerEl = row.querySelector('.recall-timer');
+    if (timerEl) timerEl.remove();
+    bubble.classList.remove('can-recall');
+    const newBubble = bubble.cloneNode(true);
+    bubble.replaceWith(newBubble);
+}
+
+/** 2 分钟撤回倒计时 */
+function startRecallTimer(messageId, bubble) {
+    let remaining = 120;
+    const timerEl = document.createElement('span');
+    timerEl.className = 'recall-timer';
+    timerEl.dataset.expired = 'false';
+    bubble.parentElement.appendChild(timerEl);
+
+    function update() {
+        if (remaining <= 0) {
+            timerEl.textContent = '';
+            timerEl.dataset.expired = 'true';
+            bubble.classList.remove('can-recall');
+            delete recallTimers[messageId];
+            return;
+        }
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        timerEl.textContent = `${m}:${s.toString().padStart(2, '0')} 内可撤回`;
+        remaining--;
+        recallTimers[messageId] = setTimeout(update, 1000);
+    }
+    update();
 }
 
 // ── DOM 辅助 ────────────────────────────────────────────

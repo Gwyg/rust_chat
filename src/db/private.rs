@@ -82,7 +82,7 @@ pub async fn get_private_history_paginated(
     let actual_limit = limit + 1;
     let rows = if let Some(before) = before_id {
         sqlx::query(
-            "SELECT id, sender, content FROM private_messages 
+            "SELECT id, sender, content, recalled FROM private_messages 
             WHERE conv_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
         )
         .bind(conv_id)
@@ -92,7 +92,7 @@ pub async fn get_private_history_paginated(
         .await?
     } else {
         sqlx::query(
-            "SELECT id, sender, content FROM private_messages 
+            "SELECT id, sender, content, recalled FROM private_messages 
             WHERE conv_id = ? ORDER BY id DESC LIMIT ?",
         )
         .bind(conv_id)
@@ -117,6 +117,8 @@ pub async fn get_private_history_paginated(
                 room: "".into(),
                 content: row.try_get("content").unwrap_or_default(),
                 msg_type: format!("private:{}", id),
+                recalled: row.try_get("recalled").unwrap_or(false),
+                message_id: Some(id),
                 ..Default::default()
             }
         })

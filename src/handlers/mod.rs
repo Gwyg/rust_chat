@@ -55,6 +55,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/groups/avatar", put(update_avatar))
         .route("/api/upload", post(upload_file))
         .route("/api/download/{file_id}", get(download_file))
+        .route("/api/messages/:message_id/recall", post(recall_message))
         .route_layer(from_fn(auth_middleware))
         .with_state(state.clone());
 

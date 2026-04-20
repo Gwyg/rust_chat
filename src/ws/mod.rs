@@ -274,14 +274,19 @@ async fn deliver_offline(socket: &mut WebSocket, state: &AppState, username: &st
             // 私聊的 source_id 是 conv_id（alice_bob），
             // 前端需要知道对方是谁，从 conv_id 中解析出非自己的那个
             let id = if msg_type == "private" {
-                // conv_id 格式：username_a_username_b（字典序）
-                source_id
-                    .split('_')
-                    .find(|&part| part != username)
-                    .unwrap_or(&source_id)
-                    .to_string()
+                // conv_id 格式：min_max（字典序拼接，用第一个 '_' 分隔不可靠）
+                // 更安全：把两种可能都试一遍
+                if source_id.starts_with(&format!("{}_", username)) {
+                    // username 在前，对方在后
+                    source_id[username.len() + 1..].to_string()
+                } else if source_id.ends_with(&format!("_{}", username)) {
+                    // username 在后，对方在前
+                    source_id[..source_id.len() - username.len() - 1].to_string()
+                } else {
+                    source_id.clone()
+                }
             } else {
-                source_id // group_id 直接用
+                source_id
             };
             UnreadItem {
                 item_type: msg_type,
