@@ -2,8 +2,7 @@ mod message;
 mod user;
 mod private;
 mod friend;
-mod group;          // ← 新增这一行
-mod offline;
+mod group;          
 mod file;
 mod cursor;
 
@@ -12,7 +11,6 @@ use sqlx::sqlite::SqlitePool;
 
 pub use cursor::*;
 pub use file::*;
-pub use offline::*;
 pub use group::*;
 pub use message::*;
 pub use user::*;

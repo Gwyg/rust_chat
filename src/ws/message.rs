@@ -31,21 +31,6 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                     error!("保存群聊消息失败: {}", e);
                 }
             }
-
-            // 对不在线的群成员存离线消息
-            let online_members = {
-                state.online.read().await.get(room).cloned().unwrap_or_default()
-            };
-            if let Ok(all_members) = db::get_group_members(&state.db, room).await {
-                for member in &all_members {
-                    if member.username != username && !online_members.contains(&member.username) {
-                        let _ = db::save_offline_message(
-                            &state.db, username, &member.username,
-                            &m.content, "group", room,
-                        ).await;
-                    }
-                }
-            }
         }
 
         // ── 私聊文字消息 ────────────────────────────
@@ -66,13 +51,7 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                     ..Default::default()
                 }).await;
             } else {
-                // 对方不在线，存离线消息
-                if let Err(e) = db::save_offline_message(
-                    &state.db, username, &target,
-                    &m.content, "private", &conv_id,
-                ).await {
-                    error!("保存离线消息失败: {}", e);
-                }
+               
             }
 
             // 无论对方在不在线，都保存到 private_messages 表
@@ -108,11 +87,7 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                         ..Default::default()
                     }).await;
                 } else {
-                    let _ = db::save_offline_message(
-                        &state.db, username, &target,
-                        &format!("[文件] {}", file_name),
-                        "private", &conv_id,
-                    ).await;
+                    
                 }
             } else {
                 // 群聊文件
@@ -135,11 +110,7 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                     if let Ok(all_members) = db::get_group_members(&state.db, room).await {
                         for member in &all_members {
                             if member.username != username && !online_members.contains(&member.username) {
-                                let _ = db::save_offline_message(
-                                    &state.db, username, &member.username,
-                                    &format!("[文件] {}", file_name),
-                                    "group", room,
-                                ).await;
+                                
                             }
                         }
                     }

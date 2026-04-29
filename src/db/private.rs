@@ -22,13 +22,12 @@ pub async fn get_user_conversations(
     username: &str,
 ) -> anyhow::Result<Vec<ConversationItem>> {
     let rows = sqlx::query(
-        "SELECT c.conv_id,
-                pm.content as last_content,
-                pm.id as last_id
-            FROM conversations c
-            JOIN private_messages pm ON c.conv_id = pm.conv_id
-            WHERE c.conv_id LIKE ? 
-            AND pm.id = (SELECT MAX(id) FROM private_messages WHERE conv_id = c.conv_id)",
+    "SELECT conv_id,
+            content as last_content,
+            id as last_id
+        FROM private_messages
+        WHERE conv_id LIKE ?
+        AND id = (SELECT MAX(id) FROM private_messages pm2 WHERE pm2.conv_id = private_messages.conv_id)",
     )
     .bind(&format!("%{}%", username))
     .fetch_all(pool)

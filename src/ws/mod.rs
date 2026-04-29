@@ -47,8 +47,8 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: Strin
         private_rx: Some(private_rx_init),
     };
 
-    // 4. 推送离线消息
-    deliver_offline(&mut socket, &state, &username).await;
+    // 4. 上线时推送未读摘要（基于 read_cursor 游标计算）
+    deliver_unread_summary(&mut socket, &state, &username).await;
 
     // 5. 主循环
     let mut heartbeat = interval(Duration::from_secs(30));
@@ -202,14 +202,15 @@ async fn do_switch(
     group_rx: &mut Option<broadcast::Receiver<ClientMessage>>,
 ) -> bool {
     if msg_type == "switch_private" {
-        // 切换到私聊模式，清空群聊状态即可，私聊 channel 始终存在
+        // 切换到私聊模式
         info!("用户 {} 切换到私聊模式", username);
         let conv_id = {
             let a = username.min(room);
             let b = username.max(room);
             format!("{}_{}", a, b)
         };
-        deliver_offline_by_source(socket, state, username, &conv_id).await;
+        // 推送该私聊会话的未读消息
+        deliver_unread_messages(socket, state, username, "private", &conv_id).await;
         *group_rx = None;
         *current_group = None;
     } else {
@@ -230,8 +231,9 @@ async fn do_switch(
             .insert(username.to_string());
 
         broadcast_system(&tx, room, &format!("用户 {} 加入房间", username)).await;
-        // 推送该群的离线消息
-        deliver_offline_by_source(socket, state, username, room).await;
+
+        // 推送该群的未读消息
+        deliver_unread_messages(socket, state, username, "group", room).await;
 
         *group_rx = Some(tx.subscribe());
         *current_group = Some(room.to_string());
@@ -257,43 +259,52 @@ async fn leave_group(state: &AppState, username: &str, current_group: &Option<St
     }
 }
 
-// ── 离线消息推送 ─────────────────────────────────────────────────────────────
+// ── 上线未读摘要推送（基于 read_cursor）────────────────────────────────────
+//
+// 用户上线时，遍历所有群组和私聊会话，计算未读数，
+// 汇总成一条 unread_summary 消息推给前端显示角标
 
-async fn deliver_offline(socket: &mut WebSocket, state: &AppState, username: &str) {
-    let Ok(summary) = db::get_unread_summary(&state.db, username).await else {
-        return;
-    };
-    if summary.is_empty() {
-        return;
+async fn deliver_unread_summary(socket: &mut WebSocket, state: &AppState, username: &str) {
+    let mut items: Vec<UnreadItem> = Vec::new();
+
+    // ── 群聊未读 ──
+    if let Ok(groups) = db::get_user_groups(&state.db, username).await {
+        for g in groups {
+            if let Ok(count) = db::get_unread_count(&state.db, username, "group", &g.group_id).await {
+                if count > 0 {
+                    items.push(UnreadItem {
+                        item_type: "group".into(),
+                        id: g.group_id,
+                        count,
+                    });
+                }
+            }
+        }
     }
 
-    let items: Vec<UnreadItem> = summary
-        .into_iter()
-        .map(|(msg_type, source_id, count)| {
-            // 私聊的 source_id 是 conv_id（alice_bob），
-            // 前端需要知道对方是谁，从 conv_id 中解析出非自己的那个
-            let id = if msg_type == "private" {
-                // conv_id 格式：min_max（字典序拼接，用第一个 '_' 分隔不可靠）
-                // 更安全：把两种可能都试一遍
-                if source_id.starts_with(&format!("{}_", username)) {
-                    // username 在前，对方在后
-                    source_id[username.len() + 1..].to_string()
-                } else if source_id.ends_with(&format!("_{}", username)) {
-                    // username 在后，对方在前
-                    source_id[..source_id.len() - username.len() - 1].to_string()
-                } else {
-                    source_id.clone()
+    // ── 私聊未读 ──
+    if let Ok(convs) = db::get_user_conversations(&state.db, username).await {
+        for conv in convs {
+            if conv.conv_type != "private" { continue; }
+            if let Ok(count) = db::get_unread_count(&state.db, username, "private", &conv.conv_id).await {
+                if count > 0 {
+                    // 从 conv_id 解析出对方 username
+                    let peer = if conv.conv_id.starts_with(&format!("{}_", username)) {
+                        conv.conv_id[username.len() + 1..].to_string()
+                    } else {
+                        conv.conv_id[..conv.conv_id.len() - username.len() - 1].to_string()
+                    };
+                    items.push(UnreadItem {
+                        item_type: "private".into(),
+                        id: peer,
+                        count,
+                    });
                 }
-            } else {
-                source_id
-            };
-            UnreadItem {
-                item_type: msg_type,
-                id,
-                count,
             }
-        })
-        .collect();
+        }
+    }
+
+    if items.is_empty() { return; }
 
     let msg = UnreadSummary {
         msg_type: "unread_summary".into(),
@@ -303,6 +314,50 @@ async fn deliver_offline(socket: &mut WebSocket, state: &AppState, username: &st
     let _ = socket
         .send(Message::Text(serde_json::to_string(&msg).unwrap()))
         .await;
+}
+
+// ── 切换会话时推送未读消息（基于 read_cursor）──────────────────────────────
+//
+// 用户打开某个会话时，从消息表中取出 last_read_id 之后的消息逐条推送，
+// 推完后更新游标标记为已读
+
+async fn deliver_unread_messages(
+    socket: &mut WebSocket,
+    state: &AppState,
+    username: &str,
+    session_type: &str,
+    session_id: &str,
+) {
+    let msgs = match db::get_unread_messages(&state.db, username, session_type, session_id).await {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("拉取未读消息失败: {}", e);
+            return;
+        }
+    };
+
+    for msg in &msgs {
+        let server_msg = ServerMessage {
+            msg_type: msg.msg_type.clone(),
+            username: msg.username.clone(),
+            content: msg.content.clone(),
+            message_id: msg.message_id,
+            recalled: if msg.recalled { Some(true) } else { None },
+            ..Default::default()
+        };
+        if socket
+            .send(Message::Text(serde_json::to_string(&server_msg).unwrap()))
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+
+    // 推完后更新游标
+    if let Err(e) = db::mark_session_read(&state.db, username, session_type, session_id).await {
+        warn!("更新已读游标失败: {}", e);
+    }
 }
 
 // ── 系统广播 ────────────────────────────────────────────────────────────────
@@ -315,36 +370,4 @@ async fn broadcast_system(tx: &broadcast::Sender<ClientMessage>, room: &str, con
         content: content.into(),
         ..Default::default()
     });
-}
-
-async fn deliver_offline_by_source(
-    socket: &mut WebSocket,
-    state: &AppState,
-    username: &str,
-    source_id: &str,
-) {
-    let Ok(msgs) = db::get_offline_messages_by_source(&state.db, username, source_id).await else {
-        return;
-    };
-    if msgs.is_empty() {
-        return;
-    }
-    for msg in &msgs {
-        let server_msg = ServerMessage {
-            msg_type: msg.msg_type.clone(),
-            username: msg.username.clone(),
-            content: format!("[离线消息] {}", msg.content),
-            ..Default::default()
-        };
-        if socket
-            .send(Message::Text(serde_json::to_string(&server_msg).unwrap()))
-            .await
-            .is_err()
-        {
-            return;
-        }
-    }
-    if let Err(e) = db::clear_offline_messages_by_source(&state.db, username, source_id).await {
-        warn!("清理离线消息失败: {}", e);
-    }
 }

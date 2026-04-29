@@ -112,3 +112,65 @@ pub async fn get_unread_count(
 
     Ok(count)
 }
+
+/// 拉取某个会话中用户未读的所有消息（id > last_read_id，不含自己发的）
+/// 用于切换会话时主动推送未读内容给用户
+pub async fn get_unread_messages(
+    pool: &DbPool,
+    username: &str,
+    session_type: &str,
+    session_id: &str,
+) -> anyhow::Result<Vec<crate::models::ClientMessage>> {
+    use sqlx::Row;
+
+    let cursor: Option<i64> = sqlx::query(
+        "SELECT last_read_id FROM read_cursor
+         WHERE username = ? AND session_id = ? AND session_type = ?"
+    )
+    .bind(username)
+    .bind(session_id)
+    .bind(session_type)
+    .fetch_optional(pool)
+    .await?
+    .and_then(|r| r.try_get("last_read_id").ok());
+
+    let last_read_id = match cursor {
+        Some(id) => id,
+        None => return Ok(vec![]), // 没有游标，说明从未打开过，不推
+    };
+
+    let (table, id_col, type_label) = match session_type {
+        "group"   => ("group_messages",   "group_id", "message"),
+        "private" => ("private_messages", "conv_id",  "private"),
+        _         => return Err(anyhow::anyhow!("无效的 session_type")),
+    };
+
+    let rows = sqlx::query(
+        &format!(
+            "SELECT id, sender, content, recalled FROM {}
+             WHERE {} = ? AND id > ? AND sender != ?
+             ORDER BY id ASC",
+            table, id_col
+        )
+    )
+    .bind(session_id)
+    .bind(last_read_id)
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+
+    let messages = rows.iter().map(|row| {
+        let id: i64 = row.try_get("id").unwrap_or(0);
+        crate::models::ClientMessage {
+            msg_type: type_label.into(),
+            username: row.try_get("sender").unwrap_or_default(),
+            room: session_id.into(),
+            content: row.try_get("content").unwrap_or_default(),
+            recalled: row.try_get("recalled").unwrap_or(false),
+            message_id: Some(id),
+            ..Default::default()
+        }
+    }).collect();
+
+    Ok(messages)
+}

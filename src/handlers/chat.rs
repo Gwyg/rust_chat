@@ -180,17 +180,7 @@ async fn broadcast_recall(state: &AppState, msg_type: &str, room: &str, sender: 
         let online_members = {
             state.online.read().await.get(room).cloned().unwrap_or_default()
         };
-        if let Ok(all_members) = db::get_group_members(&state.db, room).await {
-            for member in &all_members {
-                if member.username != sender && !online_members.contains(&member.username) {
-                    let _ = db::save_offline_message(
-                        &state.db, sender, &member.username,
-                        &format!("{} 撤回了一条消息", sender),
-                        "recall", room,
-                    ).await;
-                }
-            }
-        }
+        
     } else if msg_type == "private" {
         let target = room.split('_').find(|&p| p != sender).unwrap_or("");
         if target.is_empty() { return; }
@@ -205,12 +195,6 @@ async fn broadcast_recall(state: &AppState, msg_type: &str, room: &str, sender: 
                 message_id: Some(message_id),
                 ..Default::default()
             }).await;
-        } else {
-            let _ = db::save_offline_message(
-                &state.db, sender, target,
-                &format!("{} 撤回了一条消息", sender),
-                "recall", room,
-            ).await;
-        }
+        } 
     }
 }
