@@ -108,17 +108,17 @@ CREATE INDEX IF NOT EXISTS idx_offline_recipient
     ON offline_messages(recipient, id);
 
 
--- 群聊未读游标表：记录每个用户在每个群内最后读到的消息 ID
--- 查询未读数：SELECT count(*) FROM group_messages
---             WHERE group_id = ? AND id > last_read_id
-CREATE TABLE IF NOT EXISTS group_read_cursor (
-    username     TEXT     NOT NULL,                            -- 用户名
-    group_id     TEXT     NOT NULL,                            -- 群组 ID，关联 groups.group_id
-    last_read_id INTEGER  NOT NULL DEFAULT 0,                  -- 最后已读的 group_messages.id
-    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP,           -- 游标更新时间
-    PRIMARY KEY (username, group_id)                           -- 每个用户在每个群内唯一一条
+-- 统一已读游标表，替代原 group_read_cursor
+-- session_type: 'group' | 'private'
+-- session_id:   群聊为 group_id，私聊为 conv_id
+CREATE TABLE IF NOT EXISTS read_cursor (
+    username     TEXT     NOT NULL,
+    session_id   TEXT     NOT NULL,
+    session_type TEXT     NOT NULL DEFAULT 'group',
+    last_read_id INTEGER  NOT NULL DEFAULT 0,
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (username, session_id)
 );
-
 -- 文件表：存储上传文件的元数据
 CREATE TABLE IF NOT EXISTS files (
     id           TEXT     PRIMARY KEY,                     -- UUID

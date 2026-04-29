@@ -14,7 +14,7 @@ async fn main() {
 
     let pool = db::create_pool("chat.db").await.expect("数据库初始化失败");
 
-    sqlx::migrate!("./data")
+    sqlx::migrate!("./migrate")
         .run(&pool)
         .await
         .expect("数据库迁移失败");

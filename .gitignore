@@ -2,3 +2,5 @@
 chat.db
 /.VSCodeCounter*
 vscodecounter.*
+/data 
+/js

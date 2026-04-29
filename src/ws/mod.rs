@@ -52,7 +52,6 @@ pub async fn handler_socket(mut socket: WebSocket, state: AppState, token: Strin
 
     // 5. 主循环
     let mut heartbeat = interval(Duration::from_secs(30));
-    heartbeat.tick().await;
 
     loop {
         if !run_once(&mut socket, &state, &username, &mut ctx, &mut heartbeat).await {

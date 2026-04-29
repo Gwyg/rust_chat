@@ -3,6 +3,7 @@ mod chat;
 mod file;
 mod friends;
 mod group;
+mod unread;
 mod ws;
 
 pub use auth::*;
@@ -10,6 +11,7 @@ pub use chat::*;
 pub use file::*;
 pub use friends::*;
 pub use group::*;
+pub use unread::*;
 pub use ws::*;
 
 use crate::auth::middleware::auth_middleware;
@@ -56,6 +58,8 @@ pub fn app(state: AppState) -> Router {
         .route("/api/upload", post(upload_file))
         .route("/api/download/{file_id}", get(download_file))
         .route("/api/messages/:message_id/recall", post(recall_message))
+        .route("/api/unread", get(get_unread))
+        .route("/api/read", post(mark_read))
         .route_layer(from_fn(auth_middleware))
         .with_state(state.clone());
 
