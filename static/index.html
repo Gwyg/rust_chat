@@ -438,6 +438,19 @@
         }
         .avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
 
+        /* ── 未读角标 ── */
+        .unread-badge {
+            position: absolute;
+            top: -4px; right: -4px;
+            background: #e74c3c; color: #fff;
+            font-size: 10px; font-weight: 700;
+            border-radius: 9px; padding: 1px 5px;
+            min-width: 16px; text-align: center;
+            line-height: 14px;
+            border: 1.5px solid #fafafa;
+            pointer-events: none;
+        }
+
         @media (max-width: 640px) {
             #app { width: 100vw; height: 100vh; border-radius: 0; }
             .sidebar { width: 220px; }
@@ -607,6 +620,9 @@ let searchQuery = '';
 let contextTarget = null;     // 右键菜单目标 { messageId, bubble }
 let recallTimers = {};        // 撤回倒计时 { messageId: timerId }
 
+// 未读计数 { "group:group_id": 3, "private:username": 1 }
+let unreadCounts = {};
+
 const COLORS = ['#f4693b','#e91e8c','#9c27b0','#3f51b5','#2196f3','#00bcd4','#009688','#4caf50','#ff9800','#795548'];
 function avatarColor(n) {
     let h = 0; for (const c of n) h = (h*31 + c.charCodeAt(0)) & 0xffffffff;
@@ -632,6 +648,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('me-name').textContent = myUsername;
 
     await Promise.all([loadUsers(), loadFriends(), loadMyGroups()]);
+    await loadUnread();
     connectWS();
     switchTab('mygroups');
 
@@ -644,6 +661,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     setInterval(async () => {
         await loadMyGroups();
         if (currentTab === 'mygroups') renderSidebar();
+    }, 30000);
+
+    // 每30秒刷新一次未读数
+    setInterval(async () => {
+        await loadUnread();
+        renderSidebar();
     }, 30000);
 
     document.getElementById('msg-input').addEventListener('keypress', e => {
@@ -666,6 +689,35 @@ async function loadMyGroups() {
     try {
         const r = await fetch('/api/groups');
         if (r.ok) myGroups = await r.json();
+    } catch {}
+}
+
+async function loadUnread() {
+    try {
+        const r = await fetch(`/api/unread?username=${encodeURIComponent(myUsername)}`);
+        if (r.ok) {
+            const data = await r.json();
+            unreadCounts = {};
+            (data.items || []).forEach(item => {
+                const key = item.type + ':' + item.id;
+                unreadCounts[key] = item.count;
+            });
+        }
+    } catch {}
+}
+
+async function markRead(type, id) {
+    // type: 'group' | 'private', id: group_id 或 target username
+    const key = type + ':' + id;
+    if (!unreadCounts[key]) return;
+    try {
+        await fetch('/api/read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: myUsername, type, id }),
+        });
+        unreadCounts[key] = 0;
+        renderSidebar();
     } catch {}
 }
 function updateFriendBadge() {
@@ -706,6 +758,11 @@ function handleIncoming(msg) {
     if (t === 'private') {
         if (currentSession?.type === 'private' && currentSession.id === msg.username) {
             appendChatMsg(msg.username, msg.content, false, msg.message_id);
+        } else {
+            // 不在当前私聊会话，增加未读
+            const key = 'private:' + msg.username;
+            unreadCounts[key] = (unreadCounts[key] || 0) + 1;
+            renderSidebar();
         }
         return;
     }
@@ -715,6 +772,16 @@ function handleIncoming(msg) {
         return;
     }
     if (msg.username === '系统') { appendSysMsg(msg.content); updateOnlineCount(); return; }
+    // 群聊消息：若不是当前会话则累加未读
+    if (msg.room && msg.username !== myUsername) {
+        const inCurrent = currentSession?.type === 'mygroup' && currentSession.id === msg.room;
+        if (!inCurrent) {
+            const key = 'group:' + msg.room;
+            unreadCounts[key] = (unreadCounts[key] || 0) + 1;
+            renderSidebar();
+            return;
+        }
+    }
     appendChatMsg(msg.username, msg.content, false, msg.message_id);
 }
 
@@ -758,7 +825,11 @@ function renderMyGroups(list) {
         if (currentSession?.id === g.group_id && currentSession?.type === 'mygroup') item.classList.add('active');
         item.onclick = () => openMyGroup(g);
 
-        // 头像
+        // 头像（含未读角标）
+        const avWrap = document.createElement('div');
+        avWrap.style.position = 'relative';
+        avWrap.style.flexShrink = '0';
+
         const av = document.createElement('div');
         av.className = 'list-avatar';
         if (g.avatar) {
@@ -769,6 +840,15 @@ function renderMyGroups(list) {
         } else {
             av.style.background = avatarColor(g.group_id);
             av.textContent = avatarLetter(g.name);
+        }
+        avWrap.appendChild(av);
+
+        const unread = unreadCounts['group:' + g.group_id] || 0;
+        if (unread > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'unread-badge';
+            badge.textContent = unread > 99 ? '99+' : unread;
+            avWrap.appendChild(badge);
         }
 
         const info = makeInfo(g.name, `${g.member_count} 人 · ${g.role === 'owner' ? '群主' : g.role === 'admin' ? '管理员' : '成员'}`);
@@ -781,7 +861,7 @@ function renderMyGroups(list) {
         btnM.onclick = e => { e.stopPropagation(); openMyGroup(g, true); };
         actions.append(btnM);
 
-        item.append(av, info, actions);
+        item.append(avWrap, info, actions);
         list.appendChild(item);
     });
 }
@@ -817,7 +897,20 @@ function renderFriends(list) {
         const item = makeItem();
         if (currentSession?.id === f.username && currentSession?.type === 'private') item.classList.add('active');
         item.onclick = () => openPrivate(f.username);
-        const av = makeAvatar(f.username);
+
+        // 头像（含未读角标）
+        const avWrap = document.createElement('div');
+        avWrap.style.position = 'relative';
+        avWrap.style.flexShrink = '0';
+        avWrap.appendChild(makeAvatar(f.username));
+        const unread = unreadCounts['private:' + f.username] || 0;
+        if (unread > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'unread-badge';
+            badge.textContent = unread > 99 ? '99+' : unread;
+            avWrap.appendChild(badge);
+        }
+
         const info = makeInfo(f.username, '点击私聊');
         const actions = document.createElement('div');
         actions.className = 'list-action';
@@ -825,7 +918,7 @@ function renderFriends(list) {
         btnD.className = 'btn-sm btn-del'; btnD.textContent = '删除';
         btnD.onclick = e => { e.stopPropagation(); deleteFriend(f.username); };
         actions.append(btnD);
-        item.append(av, info, actions);
+        item.append(avWrap, info, actions);
         list.appendChild(item);
     });
 
@@ -904,6 +997,7 @@ async function openMyGroup(g, openPanel = false) {
         ws.send(JSON.stringify({ msg_type:'message', username:myUsername, room:g.group_id, content:'' }));
     }
     clearMessages(); showChatMain();
+    markRead('group', g.group_id);
     document.getElementById('chat-title').textContent = g.name;
     const badge = document.getElementById('chat-badge');
     badge.textContent = '自建群'; badge.className = 'chat-badge mygroup';
@@ -931,6 +1025,7 @@ async function openPrivate(username) {
     if (currentSession?.id === username && currentSession?.type === 'private') return;
     currentSession = { type: 'private', id: username, name: username };
     clearMessages(); showChatMain();
+    markRead('private', username);
     document.getElementById('chat-title').textContent = username;
     document.getElementById('chat-subtitle').textContent = '私聊';
     const badge = document.getElementById('chat-badge');
