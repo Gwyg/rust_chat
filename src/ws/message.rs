@@ -87,11 +87,16 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                             content: file_name.clone(),
                             file_id: Some(file_id.clone()),
                             filename: Some(file_name.clone()),
-                            mime_type: Some(mime_type),
+                            mime_type: Some(mime_type.clone()),
                             ..Default::default()
                         })
                         .await;
-                } else {
+                }
+                // 无论对方在不在线，都持久化到 DB（与私聊文字消息对齐）
+                if let Err(e) =
+                    db::save_private_message(&state.db, username, &conv_id, &file_name).await
+                {
+                    error!("保存私聊文件消息失败: {}", e);
                 }
             } else {
                 // 群聊文件
@@ -148,12 +153,14 @@ pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage
             None
         },
     };
-    socket
-        .send(Message::Text(
-            serde_json::to_string(&server_msg).expect("serialize failed"),
-        ))
-        .await
-        .is_ok()
+    let text = match serde_json::to_string(&server_msg) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("序列化消息失败: {}", e);
+            return false;
+        }
+    };
+    socket.send(Message::Text(text)).await.is_ok()
 }
 
 /// 从 group_rooms 查找群聊 channel
@@ -173,15 +180,13 @@ pub async fn find_group_room(
 }
 
 pub async fn send_error(socket: &mut WebSocket, content: &str) {
-    let _ = socket
-        .send(Message::Text(
-            serde_json::to_string(&ServerMessage {
-                msg_type: "error".into(),
-                username: "".into(),
-                content: content.into(),
-                ..Default::default()
-            })
-            .expect("serialize failed"),
-        ))
-        .await;
+    let Ok(text) = serde_json::to_string(&ServerMessage {
+        msg_type: "error".into(),
+        username: "".into(),
+        content: content.into(),
+        ..Default::default()
+    }) else {
+        return;
+    };
+    let _ = socket.send(Message::Text(text)).await;
 }
