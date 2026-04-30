@@ -36,7 +36,7 @@ pub async fn save_file_record(
 /// 根据 file_id 查询文件元数据
 pub async fn get_file_record(pool: &DbPool, id: &str) -> anyhow::Result<Option<FileRecord>> {
     let row = sqlx::query_as::<_, FileRecord>(
-        "SELECT id, filename, mime_type, file_size, storage_path, uploader, created_at
+        "SELECT id, filename, mime_type, file_size, storage_path
          FROM files WHERE id = ?"
     )
     .bind(id)

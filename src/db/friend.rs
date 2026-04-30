@@ -23,7 +23,8 @@ pub async fn accept_friend(
     to: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "UPDATE friendships SET status = 'accepted' WHERE from_user = ? AND to_user = ?"
+        "UPDATE friendships SET status = 'accepted' 
+         WHERE from_user = ? AND to_user = ? AND status = 'pending'"
     )
     .bind(from)
     .bind(to)

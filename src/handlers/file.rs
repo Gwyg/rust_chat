@@ -107,6 +107,7 @@ pub async fn upload_file(
     )
     .await
     {
+        let _ = std::fs::remove_file(&storage_path);
         return err_resp(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("保存记录失败: {}", e),
