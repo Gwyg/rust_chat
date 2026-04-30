@@ -17,18 +17,20 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                 let rooms = state.group_rooms.read().await;
                 rooms.get(room).cloned()
             };
-
-            if let Some(tx) = tx {
-                if let Err(e) = tx.send(ClientMessage {
-                    msg_type: "message".into(),
-                    username: username.into(),
-                    room: room.into(),
-                    content: m.content.clone(),
-                    ..Default::default()
-                }) {
-                    error!("广播群聊消息失败: {}", e);
-                } else if let Err(e) = db::save_message(&state.db, username, room, &m.content).await {
-                    error!("保存群聊消息失败: {}", e);
+            match db::save_message(&state.db, username, room, &m.content).await {
+                Err(e) => error!("保存群聊消息失败: {}", e),
+                Ok(_) => {
+                    if let Some(tx) = tx {
+                        if let Err(e) = tx.send(ClientMessage {
+                            msg_type: "message".into(),
+                            username: username.into(),
+                            room: room.into(),
+                            content: m.content.clone(),
+                            ..Default::default()
+                        }) {
+                            error!("广播群聊消息失败: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -43,19 +45,20 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
 
             if let Some(tx) = tx {
                 // 对方在线，直接通过 mpsc 推送
-                let _ = tx.send(ClientMessage {
-                    msg_type: "private".into(),
-                    username: username.into(),
-                    room: conv_id.clone(),
-                    content: m.content.clone(),
-                    ..Default::default()
-                }).await;
-            } else {
-               
+                let _ = tx
+                    .send(ClientMessage {
+                        msg_type: "private".into(),
+                        username: username.into(),
+                        room: conv_id.clone(),
+                        content: m.content.clone(),
+                        ..Default::default()
+                    })
+                    .await;
             }
-
             // 无论对方在不在线，都保存到 private_messages 表
-            if let Err(e) = db::save_private_message(&state.db, username, &conv_id, &m.content).await {
+            if let Err(e) =
+                db::save_private_message(&state.db, username, &conv_id, &m.content).await
+            {
                 error!("保存私聊消息失败: {}", e);
             }
         }
@@ -76,18 +79,19 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
 
                 let tx = state.private_rooms.read().await.get(&target).cloned();
                 if let Some(tx) = tx {
-                    let _ = tx.send(ClientMessage {
-                        msg_type: "file".into(),
-                        username: username.into(),
-                        room: conv_id.clone(),
-                        content: file_name.clone(),
-                        file_id: Some(file_id.clone()),
-                        filename: Some(file_name.clone()),
-                        mime_type: Some(mime_type),
-                        ..Default::default()
-                    }).await;
+                    let _ = tx
+                        .send(ClientMessage {
+                            msg_type: "file".into(),
+                            username: username.into(),
+                            room: conv_id.clone(),
+                            content: file_name.clone(),
+                            file_id: Some(file_id.clone()),
+                            filename: Some(file_name.clone()),
+                            mime_type: Some(mime_type),
+                            ..Default::default()
+                        })
+                        .await;
                 } else {
-                    
                 }
             } else {
                 // 群聊文件
@@ -105,12 +109,19 @@ pub async fn handle_client_message(state: &AppState, text: &str, username: &str,
                     });
 
                     let online_members = {
-                        state.online.read().await.get(room).cloned().unwrap_or_default()
+                        state
+                            .online
+                            .read()
+                            .await
+                            .get(room)
+                            .cloned()
+                            .unwrap_or_default()
                     };
                     if let Ok(all_members) = db::get_group_members(&state.db, room).await {
                         for member in &all_members {
-                            if member.username != username && !online_members.contains(&member.username) {
-                                
+                            if member.username != username
+                                && !online_members.contains(&member.username)
+                            {
                             }
                         }
                     }
@@ -131,7 +142,11 @@ pub async fn forward_to_client(socket: &mut WebSocket, client_msg: ClientMessage
         filename: client_msg.filename,
         mime_type: client_msg.mime_type,
         message_id: client_msg.message_id,
-        recalled: if client_msg.recalled { Some(true) } else { None },
+        recalled: if client_msg.recalled {
+            Some(true)
+        } else {
+            None
+        },
     };
     socket
         .send(Message::Text(

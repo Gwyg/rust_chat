@@ -53,7 +53,7 @@ pub async fn get_user_conversations(
 
     let group_rows = sqlx::query(
         "SELECT group_id as conv_id, content as last_content, id as last_id
-            FROM group_messages
+            FROM group_messages gm
             WHERE id = (SELECT MAX(id) FROM group_messages WHERE group_id = gm.group_id)",
     )
     .fetch_all(pool)

@@ -177,9 +177,6 @@ async fn broadcast_recall(state: &AppState, msg_type: &str, room: &str, sender: 
                 ..Default::default()
             });
         }
-        let online_members = {
-            state.online.read().await.get(room).cloned().unwrap_or_default()
-        };
         
     } else if msg_type == "private" {
         let target = room.split('_').find(|&p| p != sender).unwrap_or("");
